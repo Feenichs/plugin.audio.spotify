@@ -376,3 +376,35 @@ msgstr "Own Spotify client ID (optional, reduces waiting times)"
 msgctxt "#11151"
 msgid "Preload playlists in the background"
 msgstr "Preload playlists in the background"
+
+msgctxt "#11160"
+msgid "Lyrics"
+msgstr "Lyrics"
+
+msgctxt "#11161"
+msgid "Show lyrics"
+msgstr "Show lyrics"
+
+msgctxt "#11162"
+msgid "Loading lyrics…"
+msgstr "Loading lyrics…"
+
+msgctxt "#11163"
+msgid "No lyrics found for this track"
+msgstr "No lyrics found for this track"
+
+msgctxt "#11164"
+msgid "Lyrics: %s"
+msgstr "Lyrics: %s"
+
+msgctxt "#11165"
+msgid "Nothing is playing"
+msgstr "Nothing is playing"
+
+msgctxt "#11166"
+msgid "Load lyrics from the internet (LRCLIB, lyrics.ovh)"
+msgstr "Load lyrics from the internet (LRCLIB, lyrics.ovh)"
+
+msgctxt "#11167"
+msgid "Lyrics could not be loaded, please try again later"
+msgstr "Lyrics could not be loaded, please try again later"

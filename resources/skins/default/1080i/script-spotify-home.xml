@@ -2363,6 +2363,108 @@
             </control>
         </control>
 
+        <!-- Lyrics of the playing track -->
+        <control type="group">
+            <visible>String.IsEqual(Window.Property(view),lyrics)</visible>
+            <control type="image">
+                <width>1920</width><height>1080</height>
+                <aspectratio>scale</aspectratio>
+                <colordiffuse>30FFFFFF</colordiffuse>
+                <texture background="true">$INFO[Player.Art(thumb)]</texture>
+            </control>
+            <control type="image">
+                <top>580</top><width>1920</width><height>500</height>
+                <texture>sp_gradient_bottom.png</texture>
+            </control>
+            <control type="image">
+                <left>80</left><top>150</top><width>440</width><height>440</height>
+                <texture border="12" colordiffuse="FF242424">sp_rounded.png</texture>
+            </control>
+            <control type="image">
+                <left>80</left><top>150</top><width>440</width><height>440</height>
+                <aspectratio>scale</aspectratio>
+                <texture background="true" diffuse="sp_mask.png">$INFO[Player.Art(thumb)]</texture>
+            </control>
+            <control type="textbox">
+                <left>80</left><top>612</top><width>440</width><height>110</height>
+                <font>font30_title</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <label>$INFO[MusicPlayer.Title]</label>
+            </control>
+            <control type="label">
+                <left>80</left><top>724</top><width>440</width><height>40</height>
+                <font>font14</font>
+                <textcolor>FFB3B3B3</textcolor>
+                <label>$INFO[MusicPlayer.Artist]</label>
+            </control>
+            <control type="progress">
+                <left>80</left><top>790</top><width>440</width><height>6</height>
+                <texturebg colordiffuse="40FFFFFF">sp_white.png</texturebg>
+                <midtexture colordiffuse="FF1ED760">sp_white.png</midtexture>
+                <info>Player.Progress</info>
+            </control>
+            <control type="label">
+                <left>80</left><top>806</top><width>440</width><height>32</height>
+                <font>font10</font>
+                <textcolor>FFB3B3B3</textcolor>
+                <label>$INFO[MusicPlayer.Time]</label>
+            </control>
+            <control type="label">
+                <left>80</left><top>806</top><width>440</width><height>32</height>
+                <align>right</align>
+                <font>font10</font>
+                <textcolor>FFB3B3B3</textcolor>
+                <label>$INFO[MusicPlayer.Duration]</label>
+            </control>
+            <control type="label">
+                <left>80</left><bottom>40</bottom><width>440</width><height>32</height>
+                <font>font10</font>
+                <textcolor>FFB3B3B3</textcolor>
+                <label>$INFO[Window.Property(lyrics_source)]</label>
+            </control>
+            <control type="label">
+                <left>600</left><top>500</top><width>1240</width><height>60</height>
+                <align>center</align>
+                <font>font30_title</font>
+                <textcolor>FFB3B3B3</textcolor>
+                <label>$INFO[Window.Property(lyrics_message)]</label>
+            </control>
+            <control type="fixedlist" id="800">
+                <left>600</left><top>130</top><width>1240</width><height>900</height>
+                <orientation>vertical</orientation>
+                <focusposition>2</focusposition>
+                <onup>800</onup>
+                <scrolltime tween="sine">500</scrolltime>
+                <itemlayout width="1240" height="120">
+            <control type="label">
+                <width>1240</width><height>120</height>
+                <aligny>center</aligny>
+                <font>font30_title</font><textcolor>70FFFFFF</textcolor>
+                <wrapmultiline>true</wrapmultiline>
+                <label>$INFO[ListItem.Label]</label>
+                <visible>String.IsEqual(Window.Property(lyrics_synced),true)</visible>
+            </control>
+            <control type="label">
+                <width>1240</width><height>120</height>
+                <aligny>center</aligny>
+                <font>font30_title</font><textcolor>FFFFFFFF</textcolor>
+                <wrapmultiline>true</wrapmultiline>
+                <label>$INFO[ListItem.Label]</label>
+                <visible>!String.IsEqual(Window.Property(lyrics_synced),true)</visible>
+            </control>
+                </itemlayout>
+                <focusedlayout width="1240" height="120">
+            <control type="label">
+                <width>1240</width><height>120</height>
+                <aligny>center</aligny>
+                <font>font36_title</font><textcolor>FFFFFFFF</textcolor>
+                <wrapmultiline>true</wrapmultiline>
+                <label>$INFO[ListItem.Label]</label>
+            </control>
+                </focusedlayout>
+            </control>
+        </control>
+
         <!-- Status -->
         <control type="label">
             <left>80</left><bottom>40</bottom><width>1760</width><height>40</height>

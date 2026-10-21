@@ -18,6 +18,7 @@ import xbmcaddon
 import xbmcgui
 
 import home_data as data
+import lyrics as lyrics_lookup
 import utils
 from string_ids import *
 from utils import ADDON_ID, log_exception, log_msg
@@ -30,6 +31,7 @@ ACTION_PREVIOUS_MENU = 10
 ACTION_NAV_BACK = 92
 ACTION_CONTEXT_MENU = 117
 ACTION_MOUSE_LONG_CLICK = 108
+ACTION_SHOW_INFO = 11
 
 NAV_LIST = 100
 ROWS_GROUPLIST = 300
@@ -40,6 +42,7 @@ GRID_PANEL = 600
 TRACK_LIST = 700
 TRACK_BUTTONS = 710
 ITEM_LISTS = ROW_LISTS + (GRID_PANEL, TRACK_LIST)
+LYRICS_LIST = 800
 
 CACHE_SECONDS = 300
 # items per grid page, independent of the page size of the listings
@@ -53,6 +56,11 @@ AUTH_WAIT_SECONDS = 10
 
 HOME_WINDOW_ACTIVE = "spotify_home_window_active"
 SEARCH_HISTORY_FILE = os.path.join(utils.ADDON_DATA_PATH, "search_history.json")
+LYRICS_DIR = os.path.join(utils.ADDON_DATA_PATH, "lyrics")
+LYRICS_SETTING = "home_window_lyrics"
+LYRICS_POLL_SECS = 0.25
+# lines are shown slightly before they are sung, as in the Spotify app
+LYRICS_LEAD_SECS = 0.4
 
 TAB_LABELS = {
     data.TAB_HOME: (HOME_WINDOW_TAB_HOME_STR_ID, HOME_WINDOW_TAB_HOME_DESCRIPTION_STR_ID),
@@ -112,6 +120,11 @@ class HomeWindow(xbmcgui.WindowXML):
         self.__signed_in = False
         self.__playing_track_id = ""
         self.__player = _PlayerMonitor(self.__update_playing)
+        self.__lyrics_cache = lyrics_lookup.LyricsCache(LYRICS_DIR)
+        # lyrics are looked up one at a time, LRCLIB does not allow parallel
+        # requests, and once per track even if they are prefetched
+        self.__lyrics_lock = threading.Lock()
+        self.__lyrics_focus = False
 
     # Kodi callbacks
 
@@ -146,6 +159,18 @@ class HomeWindow(xbmcgui.WindowXML):
             item = self.__focused_item(focus_id)
             if item:
                 self.__show_context_menu(focus_id, item)
+            return
+
+        if action_id == ACTION_SHOW_INFO:
+            self.__open_lyrics()
+            return
+
+        if focus_id == LYRICS_LIST and action_id in (ACTION_MOVE_UP, ACTION_MOVE_DOWN):
+            # synced lyrics follow the track, plain ones can be scrolled
+            synced = self.getProperty("lyrics_synced") == "true"
+            at_top = self.getControl(LYRICS_LIST).getSelectedPosition() <= 0
+            if action_id == ACTION_MOVE_UP and (synced or at_top):
+                self.setFocusId(NAV_LIST)
             return
 
         if focus_id == NAV_LIST and action_id in (ACTION_MOVE_LEFT, ACTION_MOVE_RIGHT):
@@ -193,6 +218,9 @@ class HomeWindow(xbmcgui.WindowXML):
             return
         if view == "tracks":
             self.setFocusId(TRACK_LIST)
+            return
+        if view == "lyrics":
+            self.setFocusId(LYRICS_LIST)
             return
         rows = [row for row in self.__filled_rows() if row >= self.__row_offset]
         if rows:
@@ -436,6 +464,9 @@ class HomeWindow(xbmcgui.WindowXML):
         page = self.__stack[-1] if self.__stack else None
         if page and page["kind"] in ("grid", "tracks"):
             self.__show_grid(refresh)
+            return
+        if page and page["kind"] == "lyrics":
+            self.__show_lyrics()
             return
         self.__grid = None
         self.setProperty("view", "tab")
@@ -851,6 +882,8 @@ class HomeWindow(xbmcgui.WindowXML):
         if track_id == self.__playing_track_id or self.__closing:
             return
         self.__playing_track_id = track_id
+        if track_id:
+            self.__start(self.__prefetch_lyrics)
         with self.__lock:
             for control_id in ITEM_LISTS:
                 control = self.getControl(control_id)
@@ -1010,6 +1043,196 @@ class HomeWindow(xbmcgui.WindowXML):
 
         self.__start(_run)
 
+    # Lyrics
+
+    def __lyrics_enabled(self) -> bool:
+        return self.__setting_enabled(LYRICS_SETTING)
+
+    def __open_lyrics(self):
+        if not self.__lyrics_enabled() or not xbmc.getCondVisibility("Player.HasAudio"):
+            return
+        if self.__stack and self.__stack[-1]["kind"] == "lyrics":
+            return
+        self.__push_page({"kind": "lyrics", "title": self.__localize(HOME_WINDOW_LYRICS_STR_ID)})
+
+    @staticmethod
+    def __track_duration(path: str) -> float:
+        """The proxy url of a track ends with its duration: <proxy>/track/<id>/<duration>"""
+        try:
+            return float(path.rstrip("/").rsplit("/", 1)[-1])
+        except ValueError:
+            return 0.0
+
+    def __playing_track(self) -> Optional[Dict[str, Any]]:
+        if not xbmc.getCondVisibility("Player.HasAudio"):
+            return None
+        try:
+            path = xbmc.Player().getPlayingFile()
+        except RuntimeError:
+            return None
+        return self.__track(
+            path,
+            xbmc.getInfoLabel("MusicPlayer.Artist"),
+            xbmc.getInfoLabel("MusicPlayer.Title"),
+            xbmc.getInfoLabel("MusicPlayer.Album"),
+        )
+
+    def __track(self, path: str, artist: str, title: str, album: str) -> Optional[Dict[str, Any]]:
+        if not title:
+            return None
+        track_id = data.track_id_from_uri(path)
+        return {
+            "key": track_id or f"{artist}-{title}",
+            "artist": artist,
+            "title": title,
+            "album": album,
+            "duration": self.__track_duration(path) if track_id else 0.0,
+        }
+
+    def __get_lyrics(
+        self, track: Dict[str, Any], accept_stale: bool = False, refresh: bool = False
+    ):
+        """
+        (lyrics or None, error message or "", whether a later lookup may find
+        better lyrics). Cached lyrics that may be incomplete are returned if
+        accept_stale is set, otherwise they are looked up again, refresh looks
+        them up in any case.
+        """
+        with self.__lyrics_lock:
+            cached, lyrics, stale = self.__lyrics_cache.get(track["key"])
+            if cached and not refresh and (accept_stale or not stale):
+                return lyrics, "", stale
+            try:
+                found, complete = lyrics_lookup.fetch(
+                    track["artist"], track["title"], track["album"], track["duration"], log_msg
+                )
+            except (OSError, ValueError) as exc:
+                # not cached, e.g. if offline, to retry next time
+                log_msg(f"Could not look up the lyrics of '{track['title']}': {exc}")
+                return lyrics, self.__localize(HOME_WINDOW_LYRICS_FAILED_STR_ID), True
+            if found or not lyrics:
+                lyrics = found
+            self.__lyrics_cache.set(track["key"], lyrics, complete)
+            return lyrics, "", not complete
+
+    def __prefetch_lyrics(self):
+        """Look up the lyrics of the playing and the next track in advance"""
+        if not self.__lyrics_enabled():
+            return
+        tracks = [self.__playing_track()]
+        # also look up the lyrics of the next track in advance
+        try:
+            playlist = xbmc.PlayList(xbmc.PLAYLIST_MUSIC)
+            position = playlist.getposition() + 1
+            if 0 < position < playlist.size():
+                list_item = playlist[position]
+                tag = list_item.getMusicInfoTag()
+                tracks.append(
+                    self.__track(
+                        list_item.getPath(), tag.getArtist(), tag.getTitle(), tag.getAlbum()
+                    )
+                )
+        except (AttributeError, RuntimeError):
+            pass
+        for track in tracks:
+            if track and not self.__closing:
+                self.__get_lyrics(track)
+
+    def __show_lyrics(self):
+        with self.__lock:
+            self.__generation += 1
+            generation = self.__generation
+        self.__grid = None
+        self.setProperty("view", "lyrics")
+        self.setProperty("page_title", "")
+        self.setProperty("loading", "")
+        self.setProperty("empty", "")
+        self.setProperty("lyrics_synced", "")
+        self.setProperty("lyrics_source", "")
+        self.setProperty("lyrics_message", self.__localize(HOME_WINDOW_LYRICS_LOADING_STR_ID))
+        self.getControl(LYRICS_LIST).reset()
+        # an empty list cannot be focused, it is focused once filled
+        self.__lyrics_focus = True
+
+        def _run():
+            monitor = xbmc.Monitor()
+            shown_key = None
+            lyrics = None
+            line = None
+            retry_at = None
+            while not self.__stale(generation):
+                track = self.__playing_track()
+                key = track["key"] if track else ""
+                if key == shown_key and retry_at and time.time() >= retry_at:
+                    # possibly incomplete lyrics, e.g. if LRCLIB was overloaded
+                    retry_at = None
+                    better, _, incomplete = self.__get_lyrics(track, refresh=True)
+                    if self.__stale(generation):
+                        return
+                    if better and better.to_json() != (lyrics and lyrics.to_json()):
+                        lyrics, line = better, None
+                        self.getControl(LYRICS_LIST).reset()
+                        self.__fill_lyrics(lyrics, "")
+                    if incomplete:
+                        retry_at = time.time() + lyrics_lookup.INCOMPLETE_EXPIRY_SECS
+                if key != shown_key:
+                    shown_key = key
+                    lyrics, line, retry_at = None, None, None
+                    self.getControl(LYRICS_LIST).reset()
+                    self.setProperty("lyrics_source", "")
+                    if not track:
+                        self.setProperty(
+                            "lyrics_message", self.__localize(HOME_WINDOW_NOTHING_PLAYING_STR_ID)
+                        )
+                    else:
+                        self.setProperty(
+                            "lyrics_message", self.__localize(HOME_WINDOW_LYRICS_LOADING_STR_ID)
+                        )
+                        # possibly incomplete lyrics are shown at once and
+                        # looked up again in the background
+                        lyrics, error, incomplete = self.__get_lyrics(track, accept_stale=True)
+                        if self.__stale(generation):
+                            return
+                        self.__fill_lyrics(lyrics, error)
+                        if incomplete:
+                            retry_at = time.time() + (
+                                5 if lyrics else lyrics_lookup.INCOMPLETE_EXPIRY_SECS
+                            )
+
+                if lyrics and lyrics.is_synced:
+                    try:
+                        position = xbmc.Player().getTime() + LYRICS_LEAD_SECS
+                    except RuntimeError:
+                        position = 0
+                    current = lyrics.line_at(position)
+                    if current != line:
+                        line = current
+                        self.getControl(LYRICS_LIST).selectItem(max(current, 0))
+                if monitor.waitForAbort(LYRICS_POLL_SECS):
+                    return
+
+        self.__start(_run)
+
+    def __fill_lyrics(self, lyrics, error: str):
+        if not lyrics:
+            self.setProperty(
+                "lyrics_message", error or self.__localize(HOME_WINDOW_NO_LYRICS_STR_ID)
+            )
+            return
+        # instrumental parts are empty lines in synced lyrics
+        lines = [line or ("\u266A" if lyrics.is_synced else " ") for line in lyrics.text_lines()]
+        self.getControl(LYRICS_LIST).addItems(
+            [xbmcgui.ListItem(line, offscreen=True) for line in lines]
+        )
+        self.setProperty("lyrics_synced", "true" if lyrics.is_synced else "")
+        self.setProperty(
+            "lyrics_source", self.__localize(HOME_WINDOW_LYRICS_SOURCE_STR_ID) % lyrics.source
+        )
+        self.setProperty("lyrics_message", "")
+        if self.__lyrics_focus:
+            self.__lyrics_focus = False
+            self.setFocusId(LYRICS_LIST)
+
     # Search
 
     def __search(self):
@@ -1057,6 +1280,8 @@ class HomeWindow(xbmcgui.WindowXML):
         localize = self.__localize
 
         entries = []
+        if self.__lyrics_enabled() and xbmc.getCondVisibility("Player.HasAudio"):
+            entries.append((localize(HOME_WINDOW_SHOW_LYRICS_STR_ID), "lyrics"))
         if item["is_track"]:
             entries.append((localize(HOME_WINDOW_PLAY_STR_ID), "play"))
             entries.append((localize(HOME_WINDOW_QUEUE_STR_ID), "queue"))
@@ -1076,7 +1301,9 @@ class HomeWindow(xbmcgui.WindowXML):
             return
         label, action = entries[choice]
 
-        if action in ("play", "open"):
+        if action == "lyrics":
+            self.__open_lyrics()
+        elif action in ("play", "open"):
             self.__activate(control_id, item)
         elif action == "queue":
             self.__queue_tracks([item])

@@ -5,6 +5,7 @@
         <setting id="home_window_hero" type="bool" default="true" label="11117"/>
         <setting id="home_window_recent" type="bool" default="true" label="11118"/>
         <setting id="home_window_show_in_menu" type="bool" default="true" label="11119"/>
+        <setting id="home_window_lyrics" type="bool" default="true" label="11166"/>
         <setting type="action" label="11100" action="RunScript(plugin.audio.spotify,home)" option="close"/>
     </category>
 
