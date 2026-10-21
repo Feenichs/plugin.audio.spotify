@@ -14,14 +14,15 @@ New apps run in Spotify's *development mode*, which since
 [February 2026](https://developer.spotify.com/documentation/web-api/references/changes/february-2026)
 may only use part of the Web API. So the add-on uses your client ID for:
 
-- your own playlists (listing them and their tracks),
+- the tracks of your own playlists,
 - your saved songs and albums, your followed artists,
 - your top tracks and top artists,
 - albums and the albums of an artist.
 
-Everything else uses the built-in client ID: Spotify's own playlists (mixes, radios,
-"This Is …") and playlists of other users, featured playlists, new releases, categories,
-search, saving and following. If Spotify refuses a request with your client ID, the
+Everything else uses the built-in client ID: the list of your playlists (new apps do not get
+the playlists made by Spotify in it), Spotify's own playlists (mixes, radios, "This Is …") and
+playlists of other users, featured playlists, new releases, categories, search, saving and
+following. If Spotify refuses a request with your client ID, the
 add-on repeats it with the built-in one. So nothing stops working.
 
 It is free and takes about five minutes. You need a Spotify account; Spotify may require

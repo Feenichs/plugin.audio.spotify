@@ -27,13 +27,15 @@ from utils import log_msg
 
 # Requests that apps in development mode may still make, for the user's own
 # library and own playlists. Spotify's and other users' playlists only return
-# metadata, those are listed with the shared client id.
+# metadata, those are listed with the shared client id. The user's playlists
+# are listed with the shared client id too: apps in development mode do not
+# get the playlists made by Spotify (mixes, radios, "This Is ..."), not even
+# in the total.
 OWN_CLIENT_METHODS = {
     "album",
     "album_tracks",
     "artist_albums",
     "current_user_followed_artists",
-    "current_user_playlists",
     "current_user_saved_albums",
     "current_user_saved_tracks",
     "current_user_top_artists",
