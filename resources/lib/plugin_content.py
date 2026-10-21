@@ -895,6 +895,7 @@ class PluginContent:
         playlist_details = self.__get_playlist_details(self.__playlist_id, self.__snapshot)
         log_msg(f"Start playing playlist '{playlist_details['name']}'.")
 
+        utils.stop_video_playback()
         kodi_playlist = xbmc.PlayList(0)
         kodi_playlist.clear()
 

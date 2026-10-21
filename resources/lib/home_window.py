@@ -1065,6 +1065,7 @@ class HomeWindow(xbmcgui.WindowXML):
             random.shuffle(tracks)
             start = 0
         self.__remember_focus()
+        utils.stop_video_playback()
         playlist = xbmc.PlayList(xbmc.PLAYLIST_MUSIC)
         playlist.clear()
         for track in tracks:
@@ -1076,8 +1077,9 @@ class HomeWindow(xbmcgui.WindowXML):
         if not tracks:
             return
         playlist = xbmc.PlayList(xbmc.PLAYLIST_MUSIC)
-        playing = xbmc.getCondVisibility("Player.HasAudio")
+        playing = xbmc.getCondVisibility("Player.HasAudio + !Player.HasVideo")
         if not playing:
+            utils.stop_video_playback()
             playlist.clear()
         for track in tracks:
             playlist.add(track["uri"], self.__make_listitem(track))
