@@ -54,6 +54,10 @@ LIBRARY_TOTALS_MAX_AGE_SECS = 600
 # changes with every modification. Opening a cached playlist thus needs no
 # request at all. Own modifications invalidate the caches immediately.
 USER_PLAYLISTS_EXPIRATION = datetime.timedelta(minutes=5)
+# While requests are throttled, Spotify may return only part of the playlists
+# (seen: 33 of 76) or no listing at all. The last complete listing is kept
+# longer and used instead, an own modification invalidates it as well.
+USER_PLAYLISTS_FALLBACK_EXPIRATION = datetime.timedelta(days=30)
 
 # Playlists are preloaded in the background, the most opened first, so that
 # opening them needs no request. Preloading pauses while the user browses and
@@ -1137,22 +1141,47 @@ class PluginContent:
                     return self.__spotipy.current_user_playlists(limit=50, offset=offset)
                 return self.__spotipy.user_playlists(userid, limit=50, offset=offset)
 
-            page = get_page(0)
-            items = page["items"]
-            for offset in range(50, page["total"], 50):
-                items += get_page(offset)["items"]
-            playlists = self.__prepare_playlist_listitems(items)
-            # An incomplete listing (seen once while requests were throttled)
-            # must not be cached, it would be shown until the cache expires.
+            fallback_str = f"spotify.userplaylists.complete.{userid}"
+            try:
+                page = get_page(0)
+                items = page["items"]
+                for offset in range(50, page["total"], 50):
+                    items += get_page(offset)["items"]
+            except spotipy.SpotifyException as exc:
+                fallback = self.cache.get(fallback_str, checksum=checksum)
+                if not fallback:
+                    raise
+                log_msg(
+                    f"Listing the playlists of user '{userid}' failed ({exc.http_status}),"
+                    f" using the last complete listing of {len(fallback)} playlists."
+                )
+                return fallback
+            # An incomplete listing must not be cached, it would be shown until
+            # the cache expires.
             if len(items) >= page["total"]:
+                playlists = self.__prepare_playlist_listitems(items)
                 self.cache.set(
                     cache_str, playlists, checksum=checksum, expiration=USER_PLAYLISTS_EXPIRATION
                 )
+                self.cache.set(
+                    fallback_str,
+                    playlists,
+                    checksum=checksum,
+                    expiration=USER_PLAYLISTS_FALLBACK_EXPIRATION,
+                )
             else:
+                fallback = self.cache.get(fallback_str, checksum=checksum)
+                if fallback:
+                    log_msg(
+                        f"Got only {len(items)} of {page['total']} playlists for user"
+                        f" '{userid}', using the last complete listing of {len(fallback)}."
+                    )
+                    return fallback
                 log_msg(
                     f"Got only {len(items)} of {page['total']} playlists for user '{userid}',"
                     f" not caching them."
                 )
+                playlists = self.__prepare_playlist_listitems(items)
             cache_log(
                 f'Retrieved {_get_len(playlists)} UNCACHED playlists for user "{self.__userid}".'
             )
@@ -1165,7 +1194,8 @@ class PluginContent:
         total = playlists["total"]
         cache_str = f"spotify.userplaylistids.{self.__userid}"
         playlist_ids = self.cache.get(cache_str, checksum=total)
-        if playlist_ids:
+        # an incomplete list may have been cached by earlier versions
+        if playlist_ids and len(playlist_ids) >= total:
             log_msg(
                 f'Retrieved {len(playlist_ids)} cached playlist ids for user "{self.__userid}".'
             )
@@ -1177,8 +1207,14 @@ class PluginContent:
                 ]
                 count += 50
             for playlist in playlists["items"]:
-                playlist_ids.append(playlist["id"])
-            self.cache.set(cache_str, playlist_ids, checksum=total)
+                if playlist:
+                    playlist_ids.append(playlist["id"])
+            # Spotify may return only part of the playlists while requests are
+            # throttled, see USER_PLAYLISTS_FALLBACK_EXPIRATION
+            if len(playlist_ids) >= total:
+                self.cache.set(cache_str, playlist_ids, checksum=total)
+            else:
+                log_msg(f"Got only {len(playlist_ids)} of {total} playlist ids, not caching them.")
             cache_log(
                 f'Retrieved {_get_len(playlist_ids)} UNCACHED playlist ids for user "{self.__userid}".'
             )
