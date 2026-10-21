@@ -23,6 +23,10 @@ ADDON_WINDOW_ID = 10000
 
 KODI_PROPERTY_SPOTIFY_AUTH_TOKEN = "spotify-auth-token"
 KODI_PROPERTY_AUTH_TOKEN_EXPIRES_AT = "spotify-auth-token-expires-at"
+# token of the user's own client id (optional), see spotify_client.py
+KODI_PROPERTY_SPOTIFY_OWN_AUTH_TOKEN = "spotify-own-auth-token"
+OWN_CLIENT_ID_SETTING = "own_client_id"
+PRELOAD_PLAYLISTS_SETTING = "preload_playlists"
 
 
 def log_msg(msg: str, loglevel: int = LOGDEBUG, caller_name: str = "") -> None:
@@ -36,7 +40,9 @@ def log_msg(msg: str, loglevel: int = LOGDEBUG, caller_name: str = "") -> None:
 
 def log_exception(exc: Exception, exception_details: str) -> None:
     the_caller_name = get_formatted_caller_name(inspect.stack()[1][1], inspect.stack()[1][3])
-    log_msg(" ".join(format_exception(exc)), loglevel=LOGERROR, caller_name=the_caller_name)
+    # the single argument form needs Python 3.10, Kodi on Windows has 3.8
+    lines = format_exception(type(exc), exc, exc.__traceback__)
+    log_msg(" ".join(lines), loglevel=LOGERROR, caller_name=the_caller_name)
     log_msg(f"Exception --> {exception_details}.", loglevel=LOGERROR, caller_name=the_caller_name)
 
 
@@ -115,6 +121,27 @@ def cache_auth_token(auth_token: str) -> None:
 
 def get_cached_auth_token() -> str:
     return get_cached_value_from_kodi(KODI_PROPERTY_SPOTIFY_AUTH_TOKEN)
+
+
+def cache_own_auth_token(auth_token: str) -> None:
+    cache_value_in_kodi(KODI_PROPERTY_SPOTIFY_OWN_AUTH_TOKEN, auth_token)
+
+
+def get_own_auth_token() -> str:
+    # Not waiting for it like for the shared token, there may be none.
+    return xbmcgui.Window(ADDON_WINDOW_ID).getProperty(KODI_PROPERTY_SPOTIFY_OWN_AUTH_TOKEN)
+
+
+def start_preloading_playlists() -> None:
+    """Start preloading the playlists in the background, see PluginContent.preload_playlists"""
+    if xbmcaddon.Addon(id=ADDON_ID).getSetting(PRELOAD_PLAYLISTS_SETTING) == "false":
+        return
+    xbmc.executebuiltin(f"RunPlugin(plugin://{ADDON_ID}/?action=preload_playlists)")
+
+
+def get_own_client_id() -> str:
+    client_id = xbmcaddon.Addon(id=ADDON_ID).getSetting(OWN_CLIENT_ID_SETTING)
+    return "".join(client_id.split())
 
 
 def cache_auth_token_expires_at(auth_token: str) -> None:

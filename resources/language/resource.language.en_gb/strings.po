@@ -211,3 +211,168 @@ msgstr ""
 msgctxt "#11086"
 msgid "Set to 'True', if there is a problem with early stream termination"
 msgstr ""
+
+# TV interface
+msgctxt "#11100"
+msgid "TV interface"
+msgstr "TV interface"
+
+msgctxt "#11101"
+msgid "Full-screen interface with rows and tiles, made for remote controls"
+msgstr "Full-screen interface with rows and tiles, made for remote controls"
+
+msgctxt "#11102"
+msgid "Home"
+msgstr "Home"
+
+msgctxt "#11103"
+msgid "Library"
+msgstr "Library"
+
+msgctxt "#11104"
+msgid "Explore"
+msgstr "Explore"
+
+msgctxt "#11105"
+msgid "Search"
+msgstr "Search"
+
+msgctxt "#11106"
+msgid "Account"
+msgstr "Account"
+
+msgctxt "#11107"
+msgid "Recently played"
+msgstr "Recently played"
+
+msgctxt "#11108"
+msgid "Your playlists"
+msgstr "Your playlists"
+
+msgctxt "#11109"
+msgid "Show all"
+msgstr "Show all"
+
+msgctxt "#11110"
+msgid "Loading…"
+msgstr "Loading…"
+
+msgctxt "#11111"
+msgid "Nothing here yet"
+msgstr "Nothing here yet"
+
+msgctxt "#11112"
+msgid "Classic menu"
+msgstr "Classic menu"
+
+msgctxt "#11113"
+msgid "Play"
+msgstr "Play"
+
+msgctxt "#11114"
+msgid "Shuffle"
+msgstr "Shuffle"
+
+msgctxt "#11115"
+msgid "Open"
+msgstr "Open"
+
+msgctxt "#11116"
+msgid "Open TV interface when starting the add-on"
+msgstr "Open TV interface when starting the add-on"
+
+msgctxt "#11117"
+msgid "Show background preview of the selected item"
+msgstr "Show background preview of the selected item"
+
+msgctxt "#11118"
+msgid "Show \"Recently played\" row"
+msgstr "Show \"Recently played\" row"
+
+msgctxt "#11119"
+msgid "Show \"TV interface\" in the classic menu"
+msgstr "Show \"TV interface\" in the classic menu"
+
+msgctxt "#11120"
+msgid "Recent searches"
+msgstr "Recent searches"
+
+msgctxt "#11121"
+msgid "Genres & moods"
+msgstr "Genres & moods"
+
+msgctxt "#11122"
+msgid "Singles & EPs"
+msgstr "Singles & EPs"
+
+msgctxt "#11123"
+msgid "Appears on"
+msgstr "Appears on"
+
+msgctxt "#11124"
+msgid "Saved albums"
+msgstr "Saved albums"
+
+msgctxt "#11126"
+msgid "New search"
+msgstr "New search"
+
+msgctxt "#11127"
+msgid "Clear search history"
+msgstr "Clear search history"
+
+msgctxt "#11128"
+msgid "Page %s"
+msgstr "Page %s"
+
+msgctxt "#11129"
+msgid "Previous page"
+msgstr "Previous page"
+
+msgctxt "#11130"
+msgid "Next page: %s"
+msgstr "Next page: %s"
+
+msgctxt "#11131"
+msgid "Not signed in to Spotify. Sign in on the account tab."
+msgstr "Not signed in to Spotify. Sign in on the account tab."
+
+msgctxt "#11132"
+msgid "Settings"
+msgstr "Settings"
+
+msgctxt "#11134"
+msgid "Account & settings"
+msgstr "Account & settings"
+
+msgctxt "#11135"
+msgid "Add to queue"
+msgstr "Add to queue"
+
+msgctxt "#11140"
+msgid "Recently played, your playlists, top tracks and new releases"
+msgstr "Recently played, your playlists, top tracks and new releases"
+
+msgctxt "#11141"
+msgid "Your playlists, saved songs, albums and artists"
+msgstr "Your playlists, saved songs, albums and artists"
+
+msgctxt "#11142"
+msgid "Featured playlists, new releases, genres and moods"
+msgstr "Featured playlists, new releases, genres and moods"
+
+msgctxt "#11143"
+msgid "Search for songs, artists, albums and playlists"
+msgstr "Search for songs, artists, albums and playlists"
+
+msgctxt "#11144"
+msgid "Sign in, cache, settings and the classic menu"
+msgstr "Sign in, cache, settings and the classic menu"
+
+msgctxt "#11150"
+msgid "Own Spotify client ID (optional, reduces waiting times)"
+msgstr "Own Spotify client ID (optional, reduces waiting times)"
+
+msgctxt "#11151"
+msgid "Preload playlists in the background"
+msgstr "Preload playlists in the background"

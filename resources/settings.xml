@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <settings>
+    <category label="11100">
+        <setting id="home_window_on_start" type="bool" default="true" label="11116"/>
+        <setting id="home_window_hero" type="bool" default="true" label="11117"/>
+        <setting id="home_window_recent" type="bool" default="true" label="11118"/>
+        <setting id="home_window_show_in_menu" type="bool" default="true" label="11119"/>
+        <setting type="action" label="11100" action="RunScript(plugin.audio.spotify,home)" option="close"/>
+    </category>
+
     <category label="11054">
         <setting id="my_recently_played_playlist_name" type="text" default="My Recently Played"
                  label="11069" help="Disable by setting string to NONE"/>
@@ -11,6 +19,10 @@
         <setting id="problem_with_terminate_streaming" type="bool" default="false" label="11086">
           <control type="toggle"/>
         </setting>
+        <setting id="preload_playlists" type="bool" default="true" label="11151">
+          <control type="toggle"/>
+        </setting>
+        <setting id="own_client_id" type="text" default="" label="11150"/>
     </category>
 
     <category label="11055">

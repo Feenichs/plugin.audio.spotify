@@ -23,6 +23,10 @@ from string_ids import HTTP_VIDEO_RULE_ADDED_STR_ID
 from utils import ADDON_ID, PROXY_PORT, log_msg, log_exception
 
 SAVE_TO_RECENTLY_PLAYED_FILE = True
+# Playlists are preloaded a while after the start, when the menus are loaded,
+# and then regularly to catch up with changes.
+PRELOAD_START_DELAY_SECS = 60
+PRELOAD_INTERVAL_SECS = 30 * 60
 SPOTIFY_ADDON = xbmcaddon.Addon(id=ADDON_ID)
 
 
@@ -51,6 +55,7 @@ class MainService:
 
         self.__spotty_auth: SpottyAuth = SpottyAuth(self.__spotty)
         self.__auth_token_expires_at = ""
+        self.__own_client_id = ""
 
         # Workaround to make Kodi use it's VideoPlayer to play http audio streams.
         # If we don't do this, then Kodi uses PAPlayer which does not stream.
@@ -88,6 +93,7 @@ class MainService:
 
         loop_counter = 0
         loop_wait_in_secs = 6
+        next_preload = time.time() + PRELOAD_START_DELAY_SECS
         while True:
             loop_counter += 1
             if (loop_counter % 10) == 0:
@@ -112,6 +118,13 @@ class MainService:
                 )
                 log_msg("Refreshing auth token now.")
                 self.__renew_token()
+            elif utils.get_own_client_id() != self.__own_client_id:
+                log_msg("Own client id changed. Refreshing auth tokens now.")
+                self.__renew_token()
+
+            if self.__auth_token_expires_at and time.time() >= next_preload:
+                utils.start_preloading_playlists()
+                next_preload = time.time() + PRELOAD_INTERVAL_SECS
 
             if abort_app(loop_wait_in_secs):
                 log_msg("Aborting the main service.")
@@ -128,6 +141,7 @@ class MainService:
 
     def __renew_token(self) -> None:
         try:
+            self.__own_client_id = utils.get_own_client_id()
             self.__spotty_auth.renew_token()
             self.__auth_token_expires_at = utils.get_cached_auth_token_expires_at()
         except Exception as exc:

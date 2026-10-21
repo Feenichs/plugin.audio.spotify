@@ -1,7 +1,7 @@
 import xbmc
 import xbmcaddon
 
-import spotipy
+import spotify_client
 import utils
 from utils import log_msg, ADDON_ID
 
@@ -19,7 +19,7 @@ class SaveRecentlyPlayed:
             return
 
         # The auth token expires after an hour, so always use the current one.
-        self.__spotipy = spotipy.Spotify(auth=utils.get_cached_auth_token())
+        self.__spotipy = spotify_client.get_spotify(utils.get_cached_auth_token())
         if not self.__my_recently_played_playlist_id:
             self.__set_my_recently_played_playlist_id()
 

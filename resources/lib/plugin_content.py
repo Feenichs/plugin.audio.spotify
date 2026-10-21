@@ -1,3 +1,6 @@
+import datetime
+import hashlib
+import json
 import math
 import os
 import sys
@@ -13,6 +16,7 @@ import xbmcvfs
 
 import main_service
 import simplecache
+import spotify_client
 import spotipy
 import spotty
 import utils
@@ -35,6 +39,36 @@ CLEAR_CACHE_ICON = "icon_clear_cache.png"
 Playlist = Dict[str, Union[str, Dict[str, List[Any]]]]
 
 DO_CACHE_LOGGING = False
+
+# Every plugin call needs the current user and the totals of the user's library
+# (used as cache checksums). They are kept in window properties, as each
+# Spotify request takes time and too many requests get throttled.
+CURRENT_USER_PROPERTY = "spotify-current-user"
+LIBRARY_TOTALS_PROPERTY = "spotify-library-totals"
+LIBRARY_TOTALS_MAX_AGE_SECS = 600
+# Spotify throttles requests per app, so even single requests can take
+# seconds. The user's playlists are kept for a while, and the content of a
+# playlist is validated by the snapshot id from the playlists listing, which
+# changes with every modification. Opening a cached playlist thus needs no
+# request at all. Own modifications invalidate the caches immediately.
+USER_PLAYLISTS_EXPIRATION = datetime.timedelta(minutes=5)
+
+# Playlists are preloaded in the background, the most opened first, so that
+# opening them needs no request. Preloading pauses while the user browses and
+# between playlists, as its requests are throttled like the user's.
+PLAYLIST_USAGE_FILE = os.path.join(utils.ADDON_DATA_PATH, "playlist_usage.json")
+LAST_REQUEST_PROPERTY = "spotify-last-request"
+PRELOAD_PROPERTY = "spotify-preload-heartbeat"
+# a preload run that did not report for so long has ended (e.g. crashed)
+PRELOAD_STALE_SECS = 300
+PRELOAD_IDLE_SECS = 20
+PRELOAD_PAUSE_SECS = 30
+PRELOAD_PAUSE_OWN_CLIENT_ID_SECS = 3
+
+TOP_ITEMS_LIMIT = 50
+# Featured playlists and new releases change rarely, but take several requests
+BROWSE_CACHE_EXPIRATION = datetime.timedelta(hours=6)
+PLAYLIST_TAIL_LIMIT = 100
 
 
 def cache_log(msg) -> None:
@@ -66,6 +100,7 @@ class PluginContent:
     __artist_name = ""
     __owner_id = ""
     __filter = ""
+    __snapshot = ""
     __token = ""
     __limit = 50
     __params = {}
@@ -89,11 +124,27 @@ class PluginContent:
             self.default_view_albums: str = self.__addon.getSetting("albumDefaultView")
             self.default_view_category: str = self.__addon.getSetting("categoryDefaultView")
 
+            self.parse_params()
+
+            # Open the TV interface instead of the main menu, before the
+            # (slow) authentication, as the TV interface lists everything
+            # through the plugin anyway.
+            if self.__action == self.open_home_window.__name__:
+                self.open_home_window()
+                return
+            if not self.__action and self.__should_open_home_window():
+                log_msg("Opening the TV interface.")
+                xbmcplugin.endOfDirectory(handle=self.__addon_handle, succeeded=False)
+                self.open_home_window()
+                return
+
+            if self.__action != self.preload_playlists.__name__:
+                # preloading waits while the user browses
+                self.__win.setProperty(LAST_REQUEST_PROPERTY, str(time.time()))
+
             self.__spotty: spotty.Spotty = spotty.get_spotty(SpottyHelper())
 
             self.check_auth_and_refresh_spotipy()
-
-            self.parse_params()
 
             if self.__action:
                 log_msg(f"Evaluating action '{self.__action}'.")
@@ -107,6 +158,25 @@ class PluginContent:
         except Exception as exc:
             log_exception(exc, "PluginContent init error")
             xbmcplugin.endOfDirectory(handle=self.__addon_handle)
+
+    def __should_open_home_window(self) -> bool:
+        # Only when the add-on is opened in a media window. Widgets, JSON-RPC
+        # requests and the classic menu of the TV interface get the main menu.
+        return (
+            "classic" not in self.__params
+            and self.__addon_handle != -1
+            and self.__addon.getSetting("home_window_on_start") != "false"
+            and xbmc.getCondVisibility("Window.IsMedia")
+        )
+
+    @staticmethod
+    def open_home_window() -> None:
+        # Brings the TV interface to the front if it is still running.
+        xbmc.executebuiltin(f"RunScript({ADDON_ID},home)")
+
+    def check_authentication(self) -> None:
+        # Nothing to do: the plugin signs in on start if not yet authenticated.
+        pass
 
     def check_auth_and_refresh_spotipy(self):
         auth_token: str = utils.get_cached_auth_token()
@@ -127,10 +197,47 @@ class PluginContent:
         self.init_spotipy(auth_token)
 
     def init_spotipy(self, auth_token: str) -> None:
-        self.__spotipy: spotipy.Spotify = spotipy.Spotify(auth=auth_token)
-        self.__userid: str = self.__spotipy.me()["id"]
-        self.__username: str = self.__spotipy.me()["email"]
-        self.__user_country = self.__spotipy.me()["country"]
+        self.__spotipy: spotipy.Spotify = spotify_client.get_spotify(auth_token)
+        user = self.__get_current_user(auth_token)
+        self.__userid: str = user["id"]
+        self.__username: str = user["email"]
+        self.__user_country = user["country"]
+
+    def __get_current_user(self, auth_token: str) -> Dict[str, str]:
+        token_hash = hashlib.sha1(auth_token.encode("utf-8")).hexdigest()
+        try:
+            user = json.loads(self.__win.getProperty(CURRENT_USER_PROPERTY) or "{}")
+        except ValueError:
+            user = {}
+        if user.get("token") != token_hash:
+            me = self.__spotipy.me()
+            user = {
+                "token": token_hash,
+                "id": me["id"],
+                "email": me.get("email", ""),
+                "country": me["country"],
+            }
+            self.__win.setProperty(CURRENT_USER_PROPERTY, json.dumps(user))
+        return user
+
+    def __get_library_total(self, name: str, get_total) -> int:
+        try:
+            cached = json.loads(self.__win.getProperty(LIBRARY_TOTALS_PROPERTY) or "{}")
+        except ValueError:
+            cached = {}
+        if (
+            cached.get("user") != self.__userid
+            or time.time() - cached.get("time", 0) > LIBRARY_TOTALS_MAX_AGE_SECS
+        ):
+            cached = {"user": self.__userid, "time": time.time(), "totals": {}}
+        totals = cached["totals"]
+        if name not in totals:
+            totals[name] = get_total()
+            self.__win.setProperty(LIBRARY_TOTALS_PROPERTY, json.dumps(cached))
+        return totals[name]
+
+    def __clear_library_totals(self) -> None:
+        self.__win.clearProperty(LIBRARY_TOTALS_PROPERTY)
 
     def authenticate_plugin_after_login_failure(self) -> None:
         self.authenticate_plugin(
@@ -223,6 +330,9 @@ class PluginContent:
         filt = self.__params.get("applyfilter", None)
         if filt:
             self.__filter = filt[0]
+        snapshot = self.__params.get("snapshot", None)
+        if snapshot:
+            self.__snapshot = snapshot[0]
 
     def __cache_checksum(self, opt_value: Any = None) -> str:
         """simple cache checksum based on a few most important values"""
@@ -263,6 +373,7 @@ class PluginContent:
         db_file = xbmcvfs.translatePath(f"{db_path}/simplecache.db")
         os.remove(db_file)
         log_msg(f"Deleted simplecache database file {db_file}.")
+        self.__clear_library_totals()
 
         dialog = xbmcgui.Dialog()
         header = self.__addon.getAddonInfo("name")
@@ -270,6 +381,7 @@ class PluginContent:
         dialog.ok(header, msg)
 
     def refresh_listing(self) -> None:
+        self.__clear_library_totals()
         self.__addon.setSetting("cache_checksum", time.strftime("%Y%m%d%H%M%S", time.gmtime()))
         log_msg(f"New cache_checksum = '{self.__addon.getSetting('cache_checksum')}'")
         xbmc.executebuiltin("Container.Refresh")
@@ -328,7 +440,7 @@ class PluginContent:
         li.setArt({"thumb": track["thumb"]})
         li.setProperty("spotifytrackid", track["id"])
         li.setContentLookup(False)
-        li.addContextMenuItems(track["contextitems"], True)
+        li.addContextMenuItems([tuple(item) for item in track["contextitems"]], True)
         li.setProperty("do_not_analyze", "true")
         li.setMimeType("audio/wave")
 
@@ -338,7 +450,17 @@ class PluginContent:
         # Main listing.
         xbmcplugin.setContent(self.__addon_handle, "files")
 
-        items = [
+        items = []
+        if self.__addon.getSetting("home_window_show_in_menu") != "false":
+            items.append(
+                (
+                    self.__addon.getLocalizedString(HOME_WINDOW_STR_ID),
+                    f"plugin://{ADDON_ID}/?action={self.open_home_window.__name__}",
+                    MUSIC_EXPLORE_ICON,
+                    False,
+                )
+            )
+        items += [
             (
                 self.__addon.getLocalizedString(MY_MUSIC_FOLDER_STR_ID),
                 f"plugin://{ADDON_ID}/?action={self.browse_main_library.__name__}",
@@ -448,25 +570,10 @@ class PluginContent:
 
     def browse_top_artists(self) -> None:
         xbmcplugin.setContent(self.__addon_handle, "artists")
-        result = self.__spotipy.current_user_top_artists(limit=20, offset=0)
-
-        cache_str = f"spotify.topartists.{self.__userid}"
-        checksum = self.__cache_checksum(result["total"])
-        artists = self.cache.get(cache_str, checksum=checksum)
-        if artists:
-            cache_log(f'Retrieved {len(artists)} cached top artists for user "{self.__userid}".')
-        else:
-            count = len(result["items"])
-            while result["total"] > count:
-                result["items"] += self.__spotipy.current_user_top_artists(limit=20, offset=count)[
-                    "items"
-                ]
-                count += 50
-            artists = self.__prepare_artist_listitems(result["items"])
-            self.cache.set(cache_str, artists, checksum=checksum)
-            cache_log(
-                f'Retrieved {_get_len(artists)} UNCACHED top artists for user "{self.__userid}".'
-            )
+        # The top artists, as in the Spotify app. They are not cached, as this
+        # is a single request.
+        result = self.__spotipy.current_user_top_artists(limit=TOP_ITEMS_LIMIT, offset=0)
+        artists = self.__prepare_artist_listitems(result["items"])
         self.__add_artist_listitems(artists)
 
         xbmcplugin.addSortMethod(self.__addon_handle, xbmcplugin.SORT_METHOD_UNSORTED)
@@ -476,23 +583,10 @@ class PluginContent:
 
     def browse_top_tracks(self) -> None:
         xbmcplugin.setContent(self.__addon_handle, "songs")
-        results = self.__spotipy.current_user_top_tracks(limit=20, offset=0)
-
-        cache_str = f"spotify.toptracks.{self.__userid}"
-        checksum = self.__cache_checksum(results["total"])
-        tracks = self.cache.get(cache_str, checksum=checksum)
-        if tracks:
-            cache_log(f'Retrieved {len(tracks)} cached top tracks for user "{self.__userid}".')
-        else:
-            tracks = results["items"]
-            while results["next"]:
-                results = self.__spotipy.next(results)
-                tracks.extend(results["items"])
-            tracks = self.__prepare_track_listitems(tracks=tracks)
-            self.cache.set(cache_str, tracks, checksum=checksum)
-            cache_log(
-                f'Retrieved {_get_len(tracks)} UNCACHED top tracks for user "{self.__userid}".'
-            )
+        # The top tracks, as in the Spotify app. Listing all of them took
+        # minutes. They are not cached, as this is a single request.
+        results = self.__spotipy.current_user_top_tracks(limit=TOP_ITEMS_LIMIT, offset=0)
+        tracks = self.__prepare_track_listitems(tracks=results["items"])
         self.__add_track_listitems(tracks, True)
 
         xbmcplugin.addSortMethod(self.__addon_handle, xbmcplugin.SORT_METHOD_UNSORTED)
@@ -501,8 +595,12 @@ class PluginContent:
             xbmc.executebuiltin(f"Container.SetViewMode({self.default_view_songs})")
 
     def __get_explore_categories(self) -> List[Tuple[Any, str, Union[str, Any]]]:
-        items = []
+        cache_str = f"spotify.categories.{self.__user_country}"
+        items = self.cache.get(cache_str)
+        if items:
+            return items
 
+        items = []
         categories = self.__spotipy.categories(
             country=self.__user_country, limit=50, locale=self.__user_country
         )
@@ -526,6 +624,7 @@ class PluginContent:
                     thumb,
                 )
             )
+        self.cache.set(cache_str, items, expiration=datetime.timedelta(days=1))
 
         return items
 
@@ -555,7 +654,12 @@ class PluginContent:
             li = xbmcgui.ListItem(item[0], path=item[1])
             li.setProperty("do_not_analyze", "true")
             li.setProperty("IsPlayable", "false")
-            li.setArt({"icon": os.path.join(self.__addon_icon_path, item[2])})
+            # Categories have image urls or Kodi's default images, the
+            # other entries the add-on's icons.
+            if "://" in item[2] or item[2].startswith("Default"):
+                li.setArt({"icon": item[2], "thumb": item[2]})
+            else:
+                li.setArt({"icon": os.path.join(self.__addon_icon_path, item[2])})
             li.addContextMenuItems([], True)
             xbmcplugin.addDirectoryItem(
                 handle=self.__addon_handle, url=item[1], listitem=li, isFolder=True
@@ -654,15 +758,23 @@ class PluginContent:
         if self.default_view_artists:
             xbmc.executebuiltin(f"Container.SetViewMode({self.default_view_artists})")
 
-    def __get_playlist_details(self, playlist_id: str) -> Playlist:
+    def __get_playlist_details(self, playlist_id: str, snapshot: str = "") -> Playlist:
+        cache_str = f"spotify.playlistdetails.{playlist_id}"
+        if snapshot:
+            checksum = f"{snapshot}-{self.__addon.getSetting('cache_checksum')}"
+            playlist_details = self.cache.get(cache_str, checksum=checksum)
+            if playlist_details:
+                cache_log(f'Retrieved cached playlist details for "{playlist_id}" by snapshot.')
+                return playlist_details
+
         playlist = self.__spotipy.playlist(
             playlist_id, fields="tracks(total),name,owner(id),id", market=self.__user_country
         )
         # Get from cache first.
-        cache_str = f"spotify.playlistdetails.{playlist['id']}"
-        checksum = self.__cache_checksum(playlist["tracks"]["total"])
+        if not snapshot:
+            checksum = self.__cache_checksum(playlist["tracks"]["total"])
         # log_msg(f"Playlist cache_str = '{cache_str}', checksum = '{checksum}'.")
-        playlist_details = self.cache.get(cache_str, checksum=checksum)
+        playlist_details = None if snapshot else self.cache.get(cache_str, checksum=checksum)
         if playlist_details:
             cache_log(
                 f'Retrieved {playlist["tracks"]["total"]} cached playlist details'
@@ -686,7 +798,8 @@ class PluginContent:
                 tracks=playlist_details["tracks"]["items"], playlist_details=playlist
             )
             # log_msg(f"playlist_details = {playlist_details}")
-            checksum = self.__cache_checksum(playlist["tracks"]["total"])
+            if not snapshot:
+                checksum = self.__cache_checksum(playlist["tracks"]["total"])
             self.cache.set(cache_str, playlist_details, checksum=checksum)
             # log_msg(f"Got new playlist - checksum = '{checksum}'")
             cache_log(
@@ -698,7 +811,8 @@ class PluginContent:
 
     def browse_playlist(self) -> None:
         xbmcplugin.setContent(self.__addon_handle, "songs")
-        playlist_details = self.__get_playlist_details(self.__playlist_id)
+        self.__count_playlist_usage(self.__playlist_id)
+        playlist_details = self.__get_playlist_details(self.__playlist_id, self.__snapshot)
         xbmcplugin.setProperty(self.__addon_handle, "FolderName", playlist_details["name"])
         self.__add_track_listitems(playlist_details["tracks"]["items"], True)
         xbmcplugin.addSortMethod(self.__addon_handle, xbmcplugin.SORT_METHOD_UNSORTED)
@@ -706,9 +820,32 @@ class PluginContent:
         if self.default_view_songs:
             xbmc.executebuiltin(f"Container.SetViewMode({self.default_view_songs})")
 
+    def browse_playlist_tail(self) -> None:
+        """
+        The last tracks of a playlist. Used for the "recently played" playlist,
+        which the service appends every played track to, so it grows long and
+        changes all the time.
+        """
+        xbmcplugin.setContent(self.__addon_handle, "songs")
+        playlist = self.__spotipy.playlist(
+            self.__playlist_id, fields="tracks(total),name,owner(id),id", market=self.__user_country
+        )
+        total = playlist["tracks"]["total"]
+        items = []
+        for offset in range(max(0, total - PLAYLIST_TAIL_LIMIT), total, 50):
+            items += self.__spotipy.playlist_items(
+                playlist["id"], market=self.__user_country, limit=50, offset=offset
+            )["items"]
+        tracks = self.__prepare_track_listitems(tracks=items, playlist_details=playlist)
+        xbmcplugin.setProperty(self.__addon_handle, "FolderName", playlist["name"])
+        self.__add_track_listitems(tracks, True)
+        xbmcplugin.addSortMethod(self.__addon_handle, xbmcplugin.SORT_METHOD_UNSORTED)
+        xbmcplugin.endOfDirectory(handle=self.__addon_handle)
+
     def play_playlist(self) -> None:
         """play entire playlist"""
-        playlist_details = self.__get_playlist_details(self.__playlist_id)
+        self.__count_playlist_usage(self.__playlist_id)
+        playlist_details = self.__get_playlist_details(self.__playlist_id, self.__snapshot)
         log_msg(f"Start playing playlist '{playlist_details['name']}'.")
 
         kodi_playlist = xbmc.PlayList(0)
@@ -726,6 +863,87 @@ class PluginContent:
         # Add remaining tracks to the playlist while already playing.
         for track in playlist_details["tracks"]["items"][1:]:
             add_to_playlist(track)
+
+    @staticmethod
+    def __load_playlist_usage() -> Dict[str, int]:
+        try:
+            with open(PLAYLIST_USAGE_FILE, encoding="utf-8") as usage_file:
+                usage = json.load(usage_file)
+            return usage if isinstance(usage, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def __count_playlist_usage(self, playlist_id: str) -> None:
+        if not playlist_id:
+            return
+        usage = self.__load_playlist_usage()
+        usage[playlist_id] = usage.get(playlist_id, 0) + 1
+        try:
+            os.makedirs(os.path.dirname(PLAYLIST_USAGE_FILE), exist_ok=True)
+            with open(PLAYLIST_USAGE_FILE, "w", encoding="utf-8") as usage_file:
+                json.dump(usage, usage_file)
+        except OSError as exc:
+            log_exception(exc, "Could not save the playlist usage")
+
+    def __is_playlist_cached(self, playlist_id: str, snapshot: str) -> bool:
+        checksum = f"{snapshot}-{self.__addon.getSetting('cache_checksum')}"
+        return bool(self.cache.get(f"spotify.playlistdetails.{playlist_id}", checksum=checksum))
+
+    def preload_playlists(self) -> None:
+        """
+        Load the user's playlists into the cache, the most opened first. Runs
+        in the background, started by the service.
+        """
+        monitor = xbmc.Monitor()
+        heartbeat = self.__win.getProperty(PRELOAD_PROPERTY)
+        if heartbeat and time.time() - float(heartbeat) < PRELOAD_STALE_SECS:
+            log_msg("Playlists are already being preloaded.")
+            return
+
+        def wait(seconds: float) -> bool:
+            """Wait, but also while the user browses. False if Kodi exits."""
+            end = time.time() + seconds
+            while True:
+                self.__win.setProperty(PRELOAD_PROPERTY, str(time.time()))
+                last_request = float(self.__win.getProperty(LAST_REQUEST_PROPERTY) or 0)
+                remaining = max(end, last_request + PRELOAD_IDLE_SECS) - time.time()
+                if remaining <= 0:
+                    return True
+                if monitor.waitForAbort(min(remaining, 5)):
+                    return False
+
+        try:
+            if not wait(0):
+                return
+            usage = self.__load_playlist_usage()
+            recently_played = self.__addon.getSetting("my_recently_played_playlist_name")
+            playlists = [
+                playlist
+                for playlist in self.__get_user_playlists(self.__userid)
+                # the recently played playlist is long and changes all the time
+                if playlist.get("name") != recently_played
+            ]
+            # most opened first, otherwise in Spotify's order (recent first)
+            playlists.sort(key=lambda playlist: -usage.get(playlist["id"], 0))
+            pause = (
+                PRELOAD_PAUSE_OWN_CLIENT_ID_SECS
+                if utils.get_own_auth_token()
+                else PRELOAD_PAUSE_SECS
+            )
+
+            loaded = 0
+            for playlist in playlists:
+                snapshot = playlist.get("snapshot_id", "")
+                if not snapshot or self.__is_playlist_cached(playlist["id"], snapshot):
+                    continue
+                if not wait(pause if loaded else 0):
+                    return
+                log_msg(f"Preloading playlist '{playlist.get('name')}'.")
+                self.__get_playlist_details(playlist["id"], snapshot)
+                loaded += 1
+            log_msg(f"Preloaded {loaded} of {len(playlists)} playlists.")
+        finally:
+            self.__win.clearProperty(PRELOAD_PROPERTY)
 
     def __get_category(self, categoryid: str) -> Playlist:
         category = self.__spotipy.category(
@@ -832,6 +1050,12 @@ class PluginContent:
         self.refresh_listing()
 
     def __get_featured_playlists(self) -> Playlist:
+        cache_str = f"spotify.featuredplaylists.{self.__user_country}"
+        checksum = self.__cache_checksum()
+        playlists = self.cache.get(cache_str, checksum=checksum)
+        if playlists:
+            return playlists
+
         playlists = self.__spotipy.featured_playlists(
             country=self.__user_country, limit=50, offset=0
         )
@@ -845,28 +1069,33 @@ class PluginContent:
         playlists["playlists"]["items"] = self.__prepare_playlist_listitems(
             playlists["playlists"]["items"]
         )
+        self.cache.set(cache_str, playlists, checksum=checksum, expiration=BROWSE_CACHE_EXPIRATION)
 
         return playlists
 
     def __get_user_playlists(self, userid):
-        playlists = self.__spotipy.user_playlists(userid, limit=1, offset=0)
-        count = len(playlists["items"])
-        total = playlists["total"]
         cache_str = f"spotify.userplaylists.{userid}"
-        checksum = self.__cache_checksum(total)
+        # never empty, simplecache ignores empty checksums
+        checksum = f"snapshots-{self.__addon.getSetting('cache_checksum')}"
 
         cached_playlists = self.cache.get(cache_str, checksum=checksum)
         if cached_playlists:
             playlists = cached_playlists
             cache_log(f'Retrieved {len(playlists)} cached playlists for user "{self.__userid}".')
         else:
-            while total > count:
-                playlists["items"] += self.__spotipy.user_playlists(userid, limit=50, offset=count)[
-                    "items"
-                ]
-                count += 50
-            playlists = self.__prepare_playlist_listitems(playlists["items"])
-            self.cache.set(cache_str, playlists, checksum=checksum)
+            if userid == self.__userid:
+                # the same, but also available for apps in development mode
+                playlists = self.__spotipy.current_user_playlists(limit=50, offset=0)
+            else:
+                playlists = self.__spotipy.user_playlists(userid, limit=50, offset=0)
+            items = playlists["items"]
+            while playlists["next"]:
+                playlists = self.__spotipy.next(playlists)
+                items += playlists["items"]
+            playlists = self.__prepare_playlist_listitems(items)
+            self.cache.set(
+                cache_str, playlists, checksum=checksum, expiration=USER_PLAYLISTS_EXPIRATION
+            )
             cache_log(
                 f'Retrieved {_get_len(playlists)} UNCACHED playlists for user "{self.__userid}".'
             )
@@ -917,6 +1146,12 @@ class PluginContent:
             xbmc.executebuiltin(f"Container.SetViewMode({self.default_view_playlists})")
 
     def __get_new_releases(self):
+        cache_str = f"spotify.newreleases.{self.__user_country}"
+        checksum = self.__cache_checksum()
+        albums = self.cache.get(cache_str, checksum=checksum)
+        if albums:
+            return albums
+
         albums = self.__spotipy.new_releases(country=self.__user_country, limit=50, offset=0)
         count = len(albums["albums"]["items"])
         while albums["albums"]["total"] > count:
@@ -929,6 +1164,7 @@ class PluginContent:
         for album in albums["albums"]["items"]:
             album_ids.append(album["id"])
         albums = self.__prepare_album_listitems(album_ids)
+        self.cache.set(cache_str, albums, checksum=checksum, expiration=BROWSE_CACHE_EXPIRATION)
 
         return albums
 
@@ -1252,7 +1488,7 @@ class PluginContent:
             li.setArt({"thumb": track["thumb"]})
             li.setProperty("do_not_analyze", "true")
             li.setProperty("IsPlayable", "false")
-            li.addContextMenuItems(track["contextitems"], True)
+            li.addContextMenuItems([tuple(item) for item in track["contextitems"]], True)
             xbmcplugin.addDirectoryItem(
                 handle=self.__addon_handle, url=track["url"], listitem=li, isFolder=True
             )
@@ -1363,7 +1599,7 @@ class PluginContent:
             li.setProperty("do_not_analyze", "true")
             li.setProperty("IsPlayable", "false")
             li.setLabel2(item["followerslabel"])
-            li.addContextMenuItems(item["contextitems"], True)
+            li.addContextMenuItems([tuple(entry) for entry in item["contextitems"]], True)
             xbmcplugin.addDirectoryItem(
                 handle=self.__addon_handle,
                 url=item["url"],
@@ -1385,13 +1621,14 @@ class PluginContent:
             else:
                 playlist["thumb"] = "DefaultMusicAlbums.png"
 
-            playlist["url"] = self.__build_url(
-                {
-                    "action": self.browse_playlist.__name__,
-                    "playlistid": playlist["id"],
-                    "ownerid": playlist["owner"]["id"],
-                }
-            )
+            params = {
+                "action": self.browse_playlist.__name__,
+                "playlistid": playlist["id"],
+                "ownerid": playlist["owner"]["id"],
+            }
+            if playlist.get("snapshot_id"):
+                params["snapshot"] = playlist["snapshot_id"]
+            playlist["url"] = self.__build_url(params)
 
             playlist["contextitems"] = self.__get_playlist_context_menu_items(
                 playlist, followed_playlists
@@ -1409,7 +1646,8 @@ class PluginContent:
                 xbmc.getLocalizedString(KODI_PLAY_STR_ID),
                 f"RunPlugin(plugin://{ADDON_ID}/"
                 f"?action={self.play_playlist.__name__}&playlistid={playlist['id']}"
-                f"&ownerid={playlist['owner']['id']})",
+                f"&ownerid={playlist['owner']['id']}"
+                f"&snapshot={urllib.parse.quote(playlist.get('snapshot_id', ''))})",
             ),
             (
                 self.__addon.getLocalizedString(REFRESH_LISTING_STR_ID),
@@ -1443,8 +1681,17 @@ class PluginContent:
             li = xbmcgui.ListItem(item["name"], path=item["url"], offscreen=True)
             li.setProperty("do_not_analyze", "true")
             li.setProperty("IsPlayable", "false")
+            # Without an info tag, JSON-RPC (used by the TV interface) returns
+            # an empty label. The owner is shown as the playlist's "artist".
+            li.setInfo(
+                type="Music",
+                infoLabels={
+                    "title": item["name"],
+                    "artist": item.get("owner", {}).get("display_name") or "",
+                },
+            )
 
-            li.addContextMenuItems(item["contextitems"], True)
+            li.addContextMenuItems([tuple(entry) for entry in item["contextitems"]], True)
             li.setArt(
                 {
                     "fanart": os.path.join(self.__addon_icon_path, "fanart.jpg"),
@@ -1509,25 +1756,23 @@ class PluginContent:
             xbmc.executebuiltin(f"Container.SetViewMode({self.default_view_albums})")
 
     def __get_saved_album_ids(self) -> List[str]:
-        albums = self.__spotipy.current_user_saved_albums(limit=1, offset=0)
+        total = self.__get_library_total(
+            "saved_albums",
+            lambda: self.__spotipy.current_user_saved_albums(limit=1, offset=0)["total"],
+        )
         cache_str = f"spotify-savedalbumids.{self.__userid}"
-        checksum = albums["total"]
+        checksum = total
         album_ids = self.cache.get(cache_str, checksum=checksum)
         if album_ids:
             cache_log(f'Retrieved {len(album_ids)} cached album ids for user "{self.__userid}".')
             return album_ids
 
         album_ids = []
-        if albums and albums.get("items"):
-            count = len(albums["items"])
-            album_ids = []
-            while albums["total"] > count:
-                albums["items"] += self.__spotipy.current_user_saved_albums(limit=50, offset=count)[
-                    "items"
-                ]
-                count += 50
+        for offset in range(0, total, 50):
+            albums = self.__spotipy.current_user_saved_albums(limit=50, offset=offset)
             for album in albums["items"]:
                 album_ids.append(album["album"]["id"])
+        if album_ids:
             self.cache.set(cache_str, album_ids, checksum=checksum)
             cache_log(
                 f'Retrieved {_get_len(album_ids)} UNCACHED album ids for user "{self.__userid}".'
@@ -1565,10 +1810,12 @@ class PluginContent:
             xbmc.executebuiltin(f"Container.SetViewMode({self.default_view_albums})")
 
     def __get_saved_track_ids(self) -> List[str]:
-        saved_tracks = self.__spotipy.current_user_saved_tracks(
-            limit=1, offset=self.__offset, market=self.__user_country
+        total = self.__get_library_total(
+            "saved_tracks",
+            lambda: self.__spotipy.current_user_saved_tracks(
+                limit=1, offset=0, market=self.__user_country
+            )["total"],
         )
-        total = saved_tracks["total"]
         cache_str = f"spotify.savedtracksids.{self.__userid}"
         track_ids = self.cache.get(cache_str, checksum=total)
         if track_ids:
@@ -1579,14 +1826,12 @@ class PluginContent:
 
         # Get from api.
         track_ids = []
-        count = len(saved_tracks["items"])
-        while total > count:
-            saved_tracks["items"] += self.__spotipy.current_user_saved_tracks(
-                limit=50, offset=count, market=self.__user_country
-            )["items"]
-            count += 50
-        for track in saved_tracks["items"]:
-            track_ids.append(track["track"]["id"])
+        for offset in range(0, total, 50):
+            saved_tracks = self.__spotipy.current_user_saved_tracks(
+                limit=50, offset=offset, market=self.__user_country
+            )
+            for track in saved_tracks["items"]:
+                track_ids.append(track["track"]["id"])
         self.cache.set(cache_str, track_ids, checksum=total)
         cache_log(
             f'Retrieved {_get_len(track_ids)} UNCACHED saved track ids for user "{self.__userid}".'
@@ -1666,9 +1911,11 @@ class PluginContent:
             xbmc.executebuiltin(f"Container.SetViewMode({self.default_view_artists})")
 
     def __get_followed_artists(self) -> List[Dict[str, Any]]:
-        artists = self.__spotipy.current_user_followed_artists(limit=50)
+        checksum = self.__get_library_total(
+            "followed_artists",
+            lambda: self.__spotipy.current_user_followed_artists(limit=1)["artists"]["total"],
+        )
         cache_str = f"spotify.followedartists.{self.__userid}"
-        checksum = artists["artists"]["total"]
 
         cached_artists = self.cache.get(cache_str, checksum=checksum)
         if cached_artists:
@@ -1677,6 +1924,7 @@ class PluginContent:
                 f'Retrieved {len(artists)} cached followed artists for user "{self.__userid}".'
             )
         else:
+            artists = self.__spotipy.current_user_followed_artists(limit=50)
             count = len(artists["artists"]["items"])
             after = artists["artists"]["cursors"]["after"]
             while artists["artists"]["total"] > count:
@@ -1862,18 +2110,10 @@ class PluginContent:
 
     def __add_next_button(self, list_total: int) -> None:
         # Adds a next button if needed.
-        params = self.__params
         if list_total > self.__offset + self.__limit:
-            params["offset"] = [str(self.__offset + self.__limit)]
-            url = f"plugin://{ADDON_ID}/"
-
-            for key, value in list(params.items()):
-                if key == "action":
-                    url += f"?{key}={value[0]}"
-                elif key == "offset":
-                    url += f"&{key}={value}"
-                else:
-                    url += f"&{key}={value[0]}"
+            params = {key: value[0] for key, value in self.__params.items()}
+            params["offset"] = str(self.__offset + self.__limit)
+            url = f"plugin://{ADDON_ID}/?{urllib.parse.urlencode(params)}"
 
             li = xbmcgui.ListItem(xbmc.getLocalizedString(KODI_NEXT_PAGE_STR_ID), path=url)
             li.setProperty("do_not_analyze", "true")
@@ -1887,11 +2127,8 @@ class PluginContent:
         if not self.__win.getProperty("Spotify.PreCachedItems"):
             monitor = xbmc.Monitor()
             self.__win.setProperty("Spotify.PreCachedItems", "busy")
-            user_playlists = self.__get_user_playlists(self.__userid)
-            for playlist in user_playlists:
-                self.__get_playlist_details(playlist["id"])
-                if monitor.abortRequested():
-                    return
+            # playlists are preloaded paced, in the background
+            utils.start_preloading_playlists()
             self.__get_saved_albums()
             if monitor.abortRequested():
                 return

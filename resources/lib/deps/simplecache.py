@@ -106,10 +106,7 @@ class SimpleCache(object):
         cachedata = self._win.getProperty(endpoint)
 
         if cachedata:
-            if json_data or self.data_is_json:
-                cachedata = json.loads(cachedata)
-            else:
-                cachedata = eval(cachedata)
+            cachedata = self._loads(cachedata)
             if cachedata[0] > cur_time:
                 if not checksum or checksum == cachedata[2]:
                     result = cachedata[1]
@@ -121,11 +118,7 @@ class SimpleCache(object):
             usefull for (stateless) plugins
         '''
         cachedata = (expires, data, checksum)
-        if json_data or self.data_is_json:
-            cachedata_str = json.dumps(cachedata)
-        else:
-            cachedata_str = repr(cachedata)
-        self._win.setProperty(endpoint, cachedata_str)
+        self._win.setProperty(endpoint, json.dumps(cachedata))
 
 
     def _get_db_cache(self, endpoint, checksum, cur_time, json_data):
@@ -137,10 +130,7 @@ class SimpleCache(object):
             cache_data = cache_data.fetchone()
             if cache_data and cache_data[0] > cur_time:
                 if not checksum or cache_data[2] == checksum:
-                    if json_data or self.data_is_json:
-                        result = json.loads(cache_data[1])
-                    else:
-                        result = eval(cache_data[1])
+                    result = self._loads(cache_data[1])
                     # also set result in memory cache for further access
                     if self.enable_mem_cache:
                         self._set_mem_cache(endpoint, checksum, cache_data[0], result, json_data)
@@ -149,11 +139,23 @@ class SimpleCache(object):
     def _set_db_cache(self, endpoint, checksum, expires, data, json_data):
         ''' store cache data in _database '''
         query = "INSERT OR REPLACE INTO simplecache( id, expires, data, checksum) VALUES (?, ?, ?, ?)"
-        if json_data or self.data_is_json:
-            data = json.dumps(data)
-        else:
-            data = repr(data)
+        data = json.dumps(data)
         self._execute_sql(query, (endpoint, expires, data, checksum))
+
+    @staticmethod
+    def _loads(data):
+        '''
+            Data is stored as JSON, which loads much faster than evaluating
+            Python literals. Entries written by older versions are literals.
+            Note: JSON turns tuples into lists.
+        '''
+        try:
+            return json.loads(data)
+        except Exception:
+            # Not ValueError only: with Python 3.8 (Kodi on Windows), the
+            # JSONDecodeError raised in a later sub-interpreter fails with
+            # "NameError: name 'ValueError' is not defined".
+            return eval(data)
 
     def _do_cleanup(self):
         '''perform cleanup task'''
