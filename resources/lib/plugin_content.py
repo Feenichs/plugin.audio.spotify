@@ -1,5 +1,4 @@
 import datetime
-import hashlib
 import json
 import math
 import os
@@ -44,6 +43,9 @@ DO_CACHE_LOGGING = False
 # (used as cache checksums). They are kept in window properties, as each
 # Spotify request takes time and too many requests get throttled.
 CURRENT_USER_PROPERTY = "spotify-current-user"
+# The user is also kept in a file, so that the first listing after Kodi
+# starts needs no request for it. It is renewed when the user signs in.
+CURRENT_USER_FILE = os.path.join(utils.ADDON_DATA_PATH, "current_user.json")
 LIBRARY_TOTALS_PROPERTY = "spotify-library-totals"
 LIBRARY_TOTALS_MAX_AGE_SECS = 600
 # Spotify throttles requests per app, so even single requests can take
@@ -198,29 +200,53 @@ class PluginContent:
 
     def init_spotipy(self, auth_token: str) -> None:
         self.__spotipy: spotipy.Spotify = spotify_client.get_spotify(auth_token)
-        user = self.__get_current_user(auth_token)
+        user = self.__get_current_user()
         self.__userid: str = user["id"]
         self.__username: str = user["email"]
         self.__user_country = user["country"]
 
-    def __get_current_user(self, auth_token: str) -> Dict[str, str]:
-        token_hash = hashlib.sha1(auth_token.encode("utf-8")).hexdigest()
-        try:
-            user = json.loads(self.__win.getProperty(CURRENT_USER_PROPERTY) or "{}")
-        except ValueError:
-            user = {}
-        if user.get("token") != token_hash:
-            me = self.__spotipy.me()
-            user = {
-                "token": token_hash,
-                "id": me["id"],
-                "email": me.get("email", ""),
-                "country": me["country"],
-                # shown by the TV interface
-                "name": me.get("display_name") or me["id"],
-            }
-            self.__win.setProperty(CURRENT_USER_PROPERTY, json.dumps(user))
+    def __get_current_user(self) -> Dict[str, str]:
+        for load in (
+            lambda: self.__win.getProperty(CURRENT_USER_PROPERTY),
+            lambda: open(CURRENT_USER_FILE, encoding="utf-8").read(),
+        ):
+            try:
+                user = json.loads(load() or "{}")
+            except (OSError, ValueError):
+                continue
+            if user.get("id") and user.get("country") and user.get("name"):
+                self.__store_current_user(user)
+                return user
+
+        me = self.__spotipy.me()
+        user = {
+            "id": me["id"],
+            "email": me.get("email", ""),
+            "country": me["country"],
+            # shown by the TV interface
+            "name": me.get("display_name") or me["id"],
+        }
+        self.__store_current_user(user)
         return user
+
+    def __store_current_user(self, user: Dict[str, str]) -> None:
+        self.__win.setProperty(CURRENT_USER_PROPERTY, json.dumps(user))
+        if os.path.exists(CURRENT_USER_FILE):
+            return
+        try:
+            os.makedirs(os.path.dirname(CURRENT_USER_FILE), exist_ok=True)
+            with open(CURRENT_USER_FILE, "w", encoding="utf-8") as user_file:
+                json.dump(user, user_file)
+        except OSError as exc:
+            log_exception(exc, "Could not save the current user")
+
+    def __forget_current_user(self) -> None:
+        """After signing in, possibly as another user"""
+        self.__win.clearProperty(CURRENT_USER_PROPERTY)
+        try:
+            os.remove(CURRENT_USER_FILE)
+        except OSError:
+            pass
 
     def __get_library_total(self, name: str, get_total) -> int:
         try:
@@ -273,6 +299,7 @@ class PluginContent:
             return
 
         spotty_auth.renew_token()
+        self.__forget_current_user()
         self.refresh_spotipy()
 
         dialog.ok(dialog_title, self.get_authenticated_success_msg())
