@@ -10,7 +10,7 @@ import os
 import random
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 import xbmc
@@ -57,6 +57,9 @@ AUTH_WAIT_SECONDS = 10
 HOME_WINDOW_ACTIVE = "spotify_home_window_active"
 SEARCH_HISTORY_FILE = os.path.join(utils.ADDON_DATA_PATH, "search_history.json")
 LYRICS_DIR = os.path.join(utils.ADDON_DATA_PATH, "lyrics")
+# tracks played on this device, shown first in "recently played"
+PLAYED_FILE = os.path.join(utils.ADDON_DATA_PATH, "played_tracks.json")
+PLAYED_MAX_ITEMS = 30
 LYRICS_SETTING = "home_window_lyrics"
 LYRICS_POLL_SECS = 0.25
 # lines are shown slightly before they are sung, as in the Spotify app
@@ -506,7 +509,7 @@ class HomeWindow(xbmcgui.WindowXML):
                 return [], None
 
         def _run():
-            # rows are listed in parallel, but shown in order
+            # rows are listed in parallel and shown as soon as they are listed
             pool = ThreadPoolExecutor(ROW_WORKERS)
             futures = [pool.submit(_row_items, row) for row in rows]
             try:
@@ -519,25 +522,37 @@ class HomeWindow(xbmcgui.WindowXML):
                 pool.shutdown(wait=False)
 
         def _show(futures):
-            shown = 0
-            for index, (row, future) in enumerate(zip(rows, futures)):
+            indexes = {future: index for index, future in enumerate(futures)}
+            filled = set()
+            for future in as_completed(futures):
                 if self.__stale(generation):
                     return
+                index = indexes[future]
                 items, title = future.result()
-                if not items:
+                if items:
+                    with self.__lock:
+                        if self.__stale(generation):
+                            return
+                        self.__fill_row(index, title, items, rows[index])
+                    filled.add(index)
+                # Focus the topmost row only once the rows above it are listed,
+                # so that it does not move down when a row above appears.
+                done = 0
+                while done < len(futures) and futures[done].done():
+                    done += 1
+                ready = [row for row in sorted(filled) if row < done]
+                if not ready:
                     continue
-                with self.__lock:
-                    if self.__stale(generation):
-                        return
-                    self.__fill_row(index, title, items, row)
-                shown += 1
-                if self.__focus_from_row is not None and index >= self.__focus_from_row:
-                    self.__focus_from_row = None
-                    self.__set_row_offset(index)
-                    self.setFocusId(ROW_LISTS[index])
+                if self.__focus_from_row is not None:
+                    targets = [row for row in ready if row >= self.__focus_from_row]
+                    if targets:
+                        self.__focus_from_row = None
+                        self.__set_row_offset(targets[0])
+                        self.setFocusId(ROW_LISTS[targets[0]])
                 elif self.__focus_rows:
                     self.__focus_rows = False
                     self.__focus_content()
+            shown = len(filled)
             if not self.__stale(generation):
                 self.__focus_from_row = None
                 self.setProperty("loading", "")
@@ -570,13 +585,54 @@ class HomeWindow(xbmcgui.WindowXML):
         name = self.__addon.getSetting("my_recently_played_playlist_name")
         if name.upper() == "NONE":
             return []
+        local = [data.played_track_item(track) for track in self.__load_played()]
         playlist = data.find_playlist(self.__list_items(row["uri"]), name)
         if not playlist:
+            return local[: data.RECENT_MAX_ITEMS]
+        # The playlist grows with every played track, only its end is listed.
+        # It is cached by the snapshot id of the playlist, which the playlists
+        # listing provides together with the length of the playlist.
+        params = data.uri_params(playlist["uri"])
+        keys = ("playlistid", "ownerid", "snapshot", "total")
+        uri = data.create_uri(
+            data.BROWSE_PLAYLIST_TAIL, **{key: params[key] for key in keys if key in params}
+        )
+        return data.merge_recent(local, data.recent_tracks(self.__list_items(uri)))
+
+    @staticmethod
+    def __load_played() -> List[Dict[str, Any]]:
+        try:
+            with open(PLAYED_FILE, encoding="utf-8") as played_file:
+                played = json.load(played_file)
+            return [track for track in played if isinstance(track, dict) and track.get("id")]
+        except (OSError, ValueError):
             return []
-        # the playlist grows with every played track, only list its end
-        playlist_id = data.uri_params(playlist["uri"]).get("playlistid", "")
-        uri = data.create_uri(data.BROWSE_PLAYLIST_TAIL, playlistid=playlist_id)
-        return data.recent_tracks(self.__list_items(uri, use_cache=False))
+
+    def __record_played(self, track_id: str):
+        """Remember the track that just started, for the "recently played" row"""
+        path = ""
+        try:
+            path = xbmc.Player().getPlayingFile()
+        except RuntimeError:
+            pass
+        track = {
+            "id": track_id,
+            "uri": path,
+            "title": xbmc.getInfoLabel("MusicPlayer.Title"),
+            "artist": xbmc.getInfoLabel("MusicPlayer.Artist"),
+            "album": xbmc.getInfoLabel("MusicPlayer.Album"),
+            "thumb": xbmc.getInfoLabel("Player.Art(thumb)"),
+            "duration": self.__track_duration(path),
+        }
+        if not track["title"] or data.track_id_from_uri(path) != track_id:
+            return
+        played = [track] + [entry for entry in self.__load_played() if entry["id"] != track_id]
+        try:
+            os.makedirs(os.path.dirname(PLAYED_FILE), exist_ok=True)
+            with open(PLAYED_FILE, "w", encoding="utf-8") as played_file:
+                json.dump(played[:PLAYED_MAX_ITEMS], played_file)
+        except OSError as exc:
+            log_exception(exc, "Could not save the played tracks")
 
     def __list_items(self, uri: str, use_cache: bool = True) -> List[Dict[str, Any]]:
         return [
@@ -883,6 +939,7 @@ class HomeWindow(xbmcgui.WindowXML):
             return
         self.__playing_track_id = track_id
         if track_id:
+            self.__start(self.__record_played, track_id)
             self.__start(self.__prefetch_lyrics)
         with self.__lock:
             for control_id in ITEM_LISTS:

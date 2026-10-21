@@ -357,6 +357,50 @@ def recent_tracks(items: List[Dict[str, Any]], max_items: int = RECENT_MAX_ITEMS
     return result
 
 
+def played_track_item(track: Dict[str, Any]) -> Dict[str, Any]:
+    """Item of a track of the local playback history, see merge_recent"""
+    duration = track.get("duration") or 0
+    album = track.get("album") or ""
+    return make_item(
+        label=track.get("title") or "",
+        uri=track.get("uri") or "",
+        kind="track",
+        tile="square",
+        thumb=track.get("thumb") or "",
+        fanart=track.get("thumb") or "",
+        artist=track.get("artist") or "",
+        album=album,
+        duration=duration,
+        duration_label=format_duration(duration),
+        subtitle=track.get("artist") or "",
+        info_line=" · ".join(part for part in (album, format_duration(duration)) if part),
+        is_track=True,
+        properties={"spotifytrackid": track.get("id") or ""},
+    )
+
+
+def merge_recent(
+    local: List[Dict[str, Any]], playlist: List[Dict[str, Any]], max_items: int = RECENT_MAX_ITEMS
+) -> List[Dict[str, Any]]:
+    """
+    Tracks played on this device first, as the recently played playlist is only
+    updated when a track has finished, then those of the playlist. Tracks of
+    the playlist replace the local ones, they have the full context menu.
+    """
+    by_id = {item["properties"].get("spotifytrackid"): item for item in playlist}
+    result = []
+    seen = set()
+    for item in local + playlist:
+        track_id = item["properties"].get("spotifytrackid")
+        if not track_id or track_id in seen:
+            continue
+        seen.add(track_id)
+        result.append(by_id.get(track_id, item))
+        if len(result) >= max_items:
+            break
+    return result
+
+
 def find_playlist(items: List[Dict[str, Any]], name: str) -> Optional[Dict[str, Any]]:
     if not name:
         return None

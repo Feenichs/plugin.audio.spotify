@@ -68,7 +68,7 @@ PRELOAD_PAUSE_OWN_CLIENT_ID_SECS = 3
 TOP_ITEMS_LIMIT = 50
 # Featured playlists and new releases change rarely, but take several requests
 BROWSE_CACHE_EXPIRATION = datetime.timedelta(hours=6)
-PLAYLIST_TAIL_LIMIT = 100
+PLAYLIST_TAIL_LIMIT = 50
 
 
 def cache_log(msg) -> None:
@@ -827,17 +827,35 @@ class PluginContent:
         changes all the time.
         """
         xbmcplugin.setContent(self.__addon_handle, "songs")
-        playlist = self.__spotipy.playlist(
-            self.__playlist_id, fields="tracks(total),name,owner(id),id", market=self.__user_country
-        )
-        total = playlist["tracks"]["total"]
-        items = []
-        for offset in range(max(0, total - PLAYLIST_TAIL_LIMIT), total, 50):
-            items += self.__spotipy.playlist_items(
-                playlist["id"], market=self.__user_country, limit=50, offset=offset
-            )["items"]
-        tracks = self.__prepare_track_listitems(tracks=items, playlist_details=playlist)
-        xbmcplugin.setProperty(self.__addon_handle, "FolderName", playlist["name"])
+        # cached by the snapshot id, like playlists, see __get_playlist_details
+        cache_str = f"spotify.playlisttail.{self.__playlist_id}"
+        checksum = f"{self.__snapshot}-{self.__addon.getSetting('cache_checksum')}"
+        tracks = self.cache.get(cache_str, checksum=checksum) if self.__snapshot else None
+        if not tracks:
+            total = self.__params.get("total", [""])[0]
+            if total.isdigit() and self.__owner_id:
+                # known from the playlists listing, saves a request
+                total = int(total)
+                playlist = {
+                    "id": self.__playlist_id,
+                    "name": self.__addon.getSetting("my_recently_played_playlist_name"),
+                    "owner": {"id": self.__owner_id},
+                }
+            else:
+                playlist = self.__spotipy.playlist(
+                    self.__playlist_id,
+                    fields="tracks(total),name,owner(id),id",
+                    market=self.__user_country,
+                )
+                total = playlist["tracks"]["total"]
+            items = []
+            for offset in range(max(0, total - PLAYLIST_TAIL_LIMIT), total, 50):
+                items += self.__spotipy.playlist_items(
+                    playlist["id"], market=self.__user_country, limit=50, offset=offset
+                )["items"]
+            tracks = self.__prepare_track_listitems(tracks=items, playlist_details=playlist)
+            if self.__snapshot:
+                self.cache.set(cache_str, tracks, checksum=checksum)
         self.__add_track_listitems(tracks, True)
         xbmcplugin.addSortMethod(self.__addon_handle, xbmcplugin.SORT_METHOD_UNSORTED)
         xbmcplugin.endOfDirectory(handle=self.__addon_handle)
@@ -1637,6 +1655,8 @@ class PluginContent:
             }
             if playlist.get("snapshot_id"):
                 params["snapshot"] = playlist["snapshot_id"]
+                # e.g. to list the end of the playlist without requesting its length
+                params["total"] = str((playlist.get("tracks") or {}).get("total") or 0)
             playlist["url"] = self.__build_url(params)
 
             playlist["contextitems"] = self.__get_playlist_context_menu_items(
