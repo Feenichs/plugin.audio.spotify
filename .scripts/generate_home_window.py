@@ -571,9 +571,24 @@ WINDOW_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <animation effect="fade" time="250">WindowOpen</animation>
     <animation effect="fade" time="200">WindowClose</animation>
     <controls>
+        <!--
+            A video that keeps playing in the background has to be rendered,
+            otherwise it runs out of sync with the audio. It is shown as a
+            small preview on the start page, or dimmed behind the other views.
+        -->
+        <control type="videowindow">
+            <width>1920</width><height>1080</height>
+            <visible>Player.HasVideo + !{tab_view}</visible>
+        </control>
         <control type="image">
             <width>1920</width><height>1080</height>
             <texture colordiffuse="{background}">sp_white.png</texture>
+            <visible>!Player.HasVideo | {tab_view}</visible>
+        </control>
+        <control type="image">
+            <width>1920</width><height>1080</height>
+            <texture colordiffuse="{background_dimmed}">sp_white.png</texture>
+            <visible>Player.HasVideo + !{tab_view}</visible>
         </control>
 
         <!-- Preview of the selected item -->
@@ -602,14 +617,39 @@ WINDOW_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
                     <aspectratio>scale</aspectratio>
                     <fadetime>300</fadetime>
                     <texture background="true" diffuse="sp_mask.png">$INFO[ListItem.Art(thumb)]</texture>
-                    <visible>String.IsEqual(ListItem.Property(tile),square)</visible>
+                    <visible>String.IsEqual(ListItem.Property(tile),square) + !Player.HasVideo</visible>
                 </control>
                 <control type="image">
                     <left>1420</left><top>130</top><width>420</width><height>420</height>
                     <aspectratio>scale</aspectratio>
                     <fadetime>300</fadetime>
                     <texture background="true" diffuse="sp_mask_round.png">$INFO[ListItem.Art(thumb)]</texture>
-                    <visible>String.IsEqual(ListItem.Property(tile),round)</visible>
+                    <visible>String.IsEqual(ListItem.Property(tile),round) + !Player.HasVideo</visible>
+                </control>
+            </control>
+            <!-- mini preview of a video playing in the background -->
+            <control type="group">
+                <left>1360</left><top>150</top>
+                <visible>Player.HasVideo</visible>
+                <control type="image">
+                    <left>-4</left><top>-4</top><width>488</width><height>278</height>
+                    <texture border="16" colordiffuse="40FFFFFF">sp_rounded.png</texture>
+                </control>
+                <control type="videowindow">
+                    <width>480</width><height>270</height>
+                </control>
+                <control type="label">
+                    <top>284</top><width>480</width><height>36</height>
+                    <font>font12</font>
+                    <textcolor>{text}</textcolor>
+                    <scroll>true</scroll>
+                    <label>$INFO[VideoPlayer.Title]</label>
+                </control>
+                <control type="label">
+                    <top>320</top><width>480</width><height>32</height>
+                    <font>font10</font>
+                    <textcolor>{dim}</textcolor>
+                    <label>$INFO[Player.Time]$INFO[Player.Duration, / ]</label>
                 </control>
             </control>
             <control type="group">
@@ -896,6 +936,8 @@ WINDOW_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 
 def generate_window():
     xml = WINDOW_TEMPLATE.format(
+        background_dimmed="E6" + BACKGROUND[2:],
+        tab_view="String.IsEqual(Window.Property(view),tab)",
         background=BACKGROUND,
         text=TEXT,
         dim=TEXT_DIM,
