@@ -1083,19 +1083,28 @@ class PluginContent:
             playlists = cached_playlists
             cache_log(f'Retrieved {len(playlists)} cached playlists for user "{self.__userid}".')
         else:
-            if userid == self.__userid:
-                # the same, but also available for apps in development mode
-                playlists = self.__spotipy.current_user_playlists(limit=50, offset=0)
-            else:
-                playlists = self.__spotipy.user_playlists(userid, limit=50, offset=0)
-            items = playlists["items"]
-            while playlists["next"]:
-                playlists = self.__spotipy.next(playlists)
-                items += playlists["items"]
+            def get_page(offset):
+                if userid == self.__userid:
+                    # the same, but also available for apps in development mode
+                    return self.__spotipy.current_user_playlists(limit=50, offset=offset)
+                return self.__spotipy.user_playlists(userid, limit=50, offset=offset)
+
+            page = get_page(0)
+            items = page["items"]
+            for offset in range(50, page["total"], 50):
+                items += get_page(offset)["items"]
             playlists = self.__prepare_playlist_listitems(items)
-            self.cache.set(
-                cache_str, playlists, checksum=checksum, expiration=USER_PLAYLISTS_EXPIRATION
-            )
+            # An incomplete listing (seen once while requests were throttled)
+            # must not be cached, it would be shown until the cache expires.
+            if len(items) >= page["total"]:
+                self.cache.set(
+                    cache_str, playlists, checksum=checksum, expiration=USER_PLAYLISTS_EXPIRATION
+                )
+            else:
+                log_msg(
+                    f"Got only {len(items)} of {page['total']} playlists for user '{userid}',"
+                    f" not caching them."
+                )
             cache_log(
                 f'Retrieved {_get_len(playlists)} UNCACHED playlists for user "{self.__userid}".'
             )
