@@ -142,7 +142,6 @@ class SpottyAuth:
 
             with open(self.__spotty.get_spotty_token_file()) as f:
                 json_token = json.load(f)
-            log_msg(f"Spotty json token: {json_token}")
 
             # Transform token info to spotipy compatible format.
             token_info = {
@@ -151,7 +150,7 @@ class SpottyAuth:
                 "expires_at": int(time.time()) + json_token["expiresIn"],
                 "refresh_token": json_token["accessToken"],
             }
-            log_msg(f"Token: {token_info}", LOGDEBUG)
+            log_msg(f"Got token, expires in {token_info['expires_in']}s.", LOGDEBUG)
 
         except Exception as exc:
             log_exception(exc, "Get Spotify token error")
