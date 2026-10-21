@@ -216,6 +216,8 @@ class PluginContent:
                 "id": me["id"],
                 "email": me.get("email", ""),
                 "country": me["country"],
+                # shown by the TV interface
+                "name": me.get("display_name") or me["id"],
             }
             self.__win.setProperty(CURRENT_USER_PROPERTY, json.dumps(user))
         return user

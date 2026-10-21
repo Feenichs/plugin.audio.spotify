@@ -55,6 +55,9 @@ ROW_WORKERS = 3
 AUTH_WAIT_SECONDS = 10
 
 HOME_WINDOW_ACTIVE = "spotify_home_window_active"
+# the current user, kept by the plugin, see PluginContent.__get_current_user
+CURRENT_USER_PROPERTY = "spotify-current-user"
+USER_WAIT_SECONDS = 20
 SEARCH_HISTORY_FILE = os.path.join(utils.ADDON_DATA_PATH, "search_history.json")
 LYRICS_DIR = os.path.join(utils.ADDON_DATA_PATH, "lyrics")
 # tracks played on this device, shown first in "recently played"
@@ -325,7 +328,8 @@ class HomeWindow(xbmcgui.WindowXML):
 
         def _run():
             self.__signed_in = self.__wait_for_auth()
-            self.__update_user()
+            # in the background, a throttled request must not delay the rows
+            self.__start(self.__update_user)
             tabs = {tab_id: [] for tab_id in data.TABS}
             if self.__signed_in:
                 library = self.__list_items(
@@ -524,6 +528,7 @@ class HomeWindow(xbmcgui.WindowXML):
         def _show(futures):
             indexes = {future: index for index, future in enumerate(futures)}
             filled = set()
+            processed = set()
             for future in as_completed(futures):
                 if self.__stale(generation):
                     return
@@ -535,10 +540,11 @@ class HomeWindow(xbmcgui.WindowXML):
                             return
                         self.__fill_row(index, title, items, rows[index])
                     filled.add(index)
-                # Focus the topmost row only once the rows above it are listed,
+                processed.add(index)
+                # Focus the topmost row only once the rows above it are shown,
                 # so that it does not move down when a row above appears.
                 done = 0
-                while done < len(futures) and futures[done].done():
+                while done in processed:
                     done += 1
                 ready = [row for row in sorted(filled) if row < done]
                 if not ready:
@@ -1450,16 +1456,32 @@ class HomeWindow(xbmcgui.WindowXML):
         return os.path.join(self.__addon_path, "resources", filename)
 
     def __update_user(self):
-        user = ""
-        if self.__signed_in:
+        """
+        Show the user's name. The plugin keeps the user in a property, as the
+        first listing of the home tab sets it, the name is usually there
+        without a request of its own.
+        """
+        if not self.__signed_in:
+            self.setProperty("user", "")
+            return
+        monitor = xbmc.Monitor()
+        for _ in range(USER_WAIT_SECONDS):
             try:
-                import spotipy
+                user = json.loads(self.__home.getProperty(CURRENT_USER_PROPERTY) or "{}")
+            except ValueError:
+                user = {}
+            if user.get("name"):
+                self.setProperty("user", user["name"])
+                return
+            if self.__closing or monitor.waitForAbort(1):
+                return
+        try:
+            import spotipy
 
-                me = spotipy.Spotify(auth=utils.get_cached_auth_token()).me()
-                user = me.get("display_name") or me.get("id") or ""
-            except Exception as exc:
-                log_exception(exc, "Could not get the Spotify user")
-        self.setProperty("user", user)
+            me = spotipy.Spotify(auth=utils.get_cached_auth_token()).me()
+            self.setProperty("user", me.get("display_name") or me.get("id") or "")
+        except Exception as exc:
+            log_exception(exc, "Could not get the Spotify user")
 
     def __get_directory(self, uri: str, use_cache: bool = True) -> List[Dict[str, Any]]:
         with self.__lock:
