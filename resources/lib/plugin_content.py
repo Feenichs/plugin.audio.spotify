@@ -933,7 +933,7 @@ class PluginContent:
 
             loaded = 0
             for playlist in playlists:
-                snapshot = playlist.get("snapshot_id", "")
+                snapshot = playlist.get("snapshot_id") or ""
                 if not snapshot or self.__is_playlist_cached(playlist["id"], snapshot):
                     continue
                 if not wait(pause if loaded else 0):
@@ -1647,7 +1647,8 @@ class PluginContent:
                 f"RunPlugin(plugin://{ADDON_ID}/"
                 f"?action={self.play_playlist.__name__}&playlistid={playlist['id']}"
                 f"&ownerid={playlist['owner']['id']}"
-                f"&snapshot={urllib.parse.quote(playlist.get('snapshot_id', ''))})",
+                # some playlists, e.g. of categories, have no snapshot id (None)
+                f"&snapshot={urllib.parse.quote(playlist.get('snapshot_id') or '')})",
             ),
             (
                 self.__addon.getLocalizedString(REFRESH_LISTING_STR_ID),
