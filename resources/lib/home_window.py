@@ -42,6 +42,9 @@ GRID_PANEL = 600
 TRACK_LIST = 700
 TRACK_BUTTONS = 710
 ITEM_LISTS = ROW_LISTS + (GRID_PANEL, TRACK_LIST)
+# invisible buttons beside the sliders of the grid and the track list
+SCROLL_HANDLES = {602: GRID_PANEL, 702: TRACK_LIST}
+GRID_COLUMNS = 6
 LYRICS_LIST = 800
 
 CACHE_SECONDS = 300
@@ -50,6 +53,10 @@ GRID_PAGE_SIZE = 30
 # track lists are not paged, but very long listings are cut off
 TRACK_LIST_MAX_ITEMS = 1000
 TAB_SWITCH_DELAY = 0.35
+# Up/Down on a slider move the list faster while the key is held, a whole
+# list takes about SCROLL_STEPS key repeats at full speed
+SCROLL_HOLD_SECS = 0.6
+SCROLL_STEPS = 40
 # rows are listed in parallel, each listing is a separate plugin call
 ROW_WORKERS = 3
 AUTH_WAIT_SECONDS = 10
@@ -122,6 +129,8 @@ class HomeWindow(xbmcgui.WindowXML):
         # index of the topmost visible row, rows above it are hidden
         self.__row_offset = 0
         self.__tab_origin = None
+        self.__scroll_time = 0.0
+        self.__scroll_speed = 0
         self.__search_query = ""
         self.__signed_in = False
         self.__playing_track_id = ""
@@ -179,6 +188,10 @@ class HomeWindow(xbmcgui.WindowXML):
                 self.setFocusId(NAV_LIST)
             return
 
+        if focus_id in SCROLL_HANDLES and action_id in (ACTION_MOVE_UP, ACTION_MOVE_DOWN):
+            self.__scroll(SCROLL_HANDLES[focus_id], down=action_id == ACTION_MOVE_DOWN)
+            return
+
         if focus_id == NAV_LIST and action_id in (ACTION_MOVE_LEFT, ACTION_MOVE_RIGHT):
             self.__schedule_tab_switch()
             return
@@ -206,6 +219,26 @@ class HomeWindow(xbmcgui.WindowXML):
             self.__activate(control_id, item)
 
     # Navigation
+
+    def __scroll(self, list_id: int, down: bool):
+        """Move the list beside a slider, faster while the key is held"""
+        now = time.monotonic()
+        held = now - self.__scroll_time < SCROLL_HOLD_SECS
+        self.__scroll_time = now
+        control = self.getControl(list_id)
+        unit = GRID_COLUMNS if list_id == GRID_PANEL else 1
+        position = control.getSelectedPosition()
+        if not down and position < unit:
+            self.setFocusId(NAV_LIST)
+            return
+        # rows of the grid, tracks of the track list
+        lines = (control.size() + unit - 1) // unit
+        max_speed = max(1, lines // SCROLL_STEPS)
+        start_speed = max(1, max_speed // 4)
+        self.__scroll_speed = min(self.__scroll_speed + 1, max_speed) if held else start_speed
+        step = self.__scroll_speed * unit
+        target = position + step if down else position - step
+        control.selectItem(min(max(target, position % unit), control.size() - 1))
 
     def __on_back(self, focus_id):
         if self.__stack:

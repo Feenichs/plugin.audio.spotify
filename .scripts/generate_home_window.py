@@ -118,10 +118,11 @@ def generate_textures():
         os.makedirs(MEDIA)
 
     write_png(os.path.join(MEDIA, "sp_white.png"), 8, 8, lambda x, y: (255, 255, 255, 255))
-    # 9-slice textures, used with border="12" / border="31" / border="20"
+    # 9-slice textures, used with border="12" / border="31" / border="20" / border="4"
     write_png(os.path.join(MEDIA, "sp_rounded.png"), 64, 64, rounded(64, 64, 10))
     write_png(os.path.join(MEDIA, "sp_pill.png"), 64, 64, rounded(64, 64, 31))
     write_png(os.path.join(MEDIA, "sp_focus.png"), 64, 64, rounded(64, 64, 14, outline=5))
+    write_png(os.path.join(MEDIA, "sp_scroll.png"), 8, 32, rounded(8, 32, 4))
     write_png(os.path.join(MEDIA, "sp_focus_round.png"), 128, 128, rounded(128, 128, 64, outline=5))
     # alpha masks for covers and artist images
     write_png(os.path.join(MEDIA, "sp_mask.png"), THUMB_SIZE, THUMB_SIZE, rounded(256, 256, 10))
@@ -525,6 +526,45 @@ def button_layout(focused):
     )
 
 
+def scrollbar(control_id, list_id, handle_id, left, top, height):
+    """
+    A slider beside a long list, like in the Kodi menus. It is only a short
+    green line without a track, its length shows the visible part. Right
+    moves to an invisible button beside it, Up and Down on that button move
+    the list continuously (see HomeWindow.__scroll), not every remote has
+    page keys. The scrollbar itself only pages, it is left to the mouse.
+    """
+    return """
+            <control type="button" id="{handle_id}">
+                <left>{handle_left}</left><top>{top}</top><width>48</width><height>{height}</height>
+                <texturefocus>-</texturefocus>
+                <texturenofocus>-</texturenofocus>
+                <onleft>{list_id}</onleft>
+                <visible>Container({list_id}).HasNext | Container({list_id}).HasPrevious</visible>
+            </control>
+            <control type="scrollbar" id="{control_id}">
+                <left>{left}</left><top>{top}</top><width>8</width><height>{height}</height>
+                <texturesliderbackground colordiffuse="00FFFFFF">sp_white.png</texturesliderbackground>
+                <texturesliderbar border="4" colordiffuse="{accent}">sp_scroll.png</texturesliderbar>
+                <texturesliderbarfocus border="4" colordiffuse="{accent}">sp_scroll.png</texturesliderbarfocus>
+                <textureslidernib>-</textureslidernib>
+                <textureslidernibfocus>-</textureslidernibfocus>
+                <orientation>vertical</orientation>
+                <showonepage>false</showonepage>
+                <onleft>{list_id}</onleft>
+                <animation effect="fade" start="100" end="50" time="150" condition="!Control.HasFocus({handle_id})">Conditional</animation>
+            </control>""".format(
+        control_id=control_id,
+        list_id=list_id,
+        handle_id=handle_id,
+        handle_left=left - 20,
+        left=left,
+        top=top,
+        height=height,
+        accent=ACCENT,
+    )
+
+
 def lyrics_layout(focused):
     """
     One line of the lyrics. The current line of synced lyrics is the
@@ -777,12 +817,14 @@ WINDOW_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
                 <left>60</left><top>210</top><width>1800</width><height>870</height>
                 <orientation>vertical</orientation>
                 <onup>100</onup>
+                <onright>602</onright>
+                <pagecontrol>601</pagecontrol>
                 <scrolltime tween="sine">250</scrolltime>
                 <itemlayout width="{grid_width}" height="{tile_height}">{grid_item}
                 </itemlayout>
                 <focusedlayout width="{grid_width}" height="{tile_height}">{grid_focused}
                 </focusedlayout>
-            </control>
+            </control>{grid_scrollbar}
         </control>
 
         <!-- Track list of albums and playlists -->
@@ -824,12 +866,14 @@ WINDOW_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
                 <orientation>vertical</orientation>
                 <onup>100</onup>
                 <onleft>710</onleft>
+                <onright>702</onright>
+                <pagecontrol>701</pagecontrol>
                 <scrolltime tween="sine">200</scrolltime>
                 <itemlayout width="1240" height="88">{track_item}
                 </itemlayout>
                 <focusedlayout width="1240" height="88">{track_focused}
                 </focusedlayout>
-            </control>
+            </control>{track_scrollbar}
         </control>
 
         <!-- Lyrics of the playing track -->
@@ -951,8 +995,10 @@ def generate_window():
         tile_height=TILE_HEIGHT,
         grid_item=tile_layout(600, False, GRID_WIDTH),
         grid_focused=tile_layout(600, True, GRID_WIDTH),
+        grid_scrollbar=scrollbar(601, 600, 602, 1870, 220, 850),
         track_item=track_layout(False),
         track_focused=track_layout(True),
+        track_scrollbar=scrollbar(701, 700, 702, 1864, 140, 904),
         button_item=button_layout(False),
         button_focused=button_layout(True),
         lyrics_item=lyrics_layout(False),

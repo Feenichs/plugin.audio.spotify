@@ -2014,6 +2014,8 @@
                 <left>60</left><top>210</top><width>1800</width><height>870</height>
                 <orientation>vertical</orientation>
                 <onup>100</onup>
+                <onright>602</onright>
+                <pagecontrol>601</pagecontrol>
                 <scrolltime tween="sine">250</scrolltime>
                 <itemlayout width="300" height="350">
         <control type="group">
@@ -2220,6 +2222,25 @@
         </control>
                 </focusedlayout>
             </control>
+            <control type="button" id="602">
+                <left>1850</left><top>220</top><width>48</width><height>850</height>
+                <texturefocus>-</texturefocus>
+                <texturenofocus>-</texturenofocus>
+                <onleft>600</onleft>
+                <visible>Container(600).HasNext | Container(600).HasPrevious</visible>
+            </control>
+            <control type="scrollbar" id="601">
+                <left>1870</left><top>220</top><width>8</width><height>850</height>
+                <texturesliderbackground colordiffuse="00FFFFFF">sp_white.png</texturesliderbackground>
+                <texturesliderbar border="4" colordiffuse="FF1ED760">sp_scroll.png</texturesliderbar>
+                <texturesliderbarfocus border="4" colordiffuse="FF1ED760">sp_scroll.png</texturesliderbarfocus>
+                <textureslidernib>-</textureslidernib>
+                <textureslidernibfocus>-</textureslidernibfocus>
+                <orientation>vertical</orientation>
+                <showonepage>false</showonepage>
+                <onleft>600</onleft>
+                <animation effect="fade" start="100" end="50" time="150" condition="!Control.HasFocus(602)">Conditional</animation>
+            </control>
         </control>
 
         <!-- Track list of albums and playlists -->
@@ -2297,6 +2318,8 @@
                 <orientation>vertical</orientation>
                 <onup>100</onup>
                 <onleft>710</onleft>
+                <onright>702</onright>
+                <pagecontrol>701</pagecontrol>
                 <scrolltime tween="sine">200</scrolltime>
                 <itemlayout width="1240" height="88">
             <control type="label">
@@ -2400,6 +2423,25 @@
                 <label>$INFO[ListItem.Property(duration_label)]</label>
             </control>
                 </focusedlayout>
+            </control>
+            <control type="button" id="702">
+                <left>1844</left><top>140</top><width>48</width><height>904</height>
+                <texturefocus>-</texturefocus>
+                <texturenofocus>-</texturenofocus>
+                <onleft>700</onleft>
+                <visible>Container(700).HasNext | Container(700).HasPrevious</visible>
+            </control>
+            <control type="scrollbar" id="701">
+                <left>1864</left><top>140</top><width>8</width><height>904</height>
+                <texturesliderbackground colordiffuse="00FFFFFF">sp_white.png</texturesliderbackground>
+                <texturesliderbar border="4" colordiffuse="FF1ED760">sp_scroll.png</texturesliderbar>
+                <texturesliderbarfocus border="4" colordiffuse="FF1ED760">sp_scroll.png</texturesliderbarfocus>
+                <textureslidernib>-</textureslidernib>
+                <textureslidernibfocus>-</textureslidernibfocus>
+                <orientation>vertical</orientation>
+                <showonepage>false</showonepage>
+                <onleft>700</onleft>
+                <animation effect="fade" start="100" end="50" time="150" condition="!Control.HasFocus(702)">Conditional</animation>
             </control>
         </control>
 
