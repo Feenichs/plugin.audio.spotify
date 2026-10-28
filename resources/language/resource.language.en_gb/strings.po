@@ -212,6 +212,10 @@ msgctxt "#11086"
 msgid "Set to 'True', if there is a problem with early stream termination"
 msgstr ""
 
+msgctxt "#11087"
+msgid "Own Spotify client ID (optional, reduces waiting times)"
+msgstr ""
+
 # TV interface
 msgctxt "#11100"
 msgid "TV interface"
@@ -368,10 +372,6 @@ msgstr "Search for songs, artists, albums and playlists"
 msgctxt "#11144"
 msgid "Sign in, cache, settings and the classic menu"
 msgstr "Sign in, cache, settings and the classic menu"
-
-msgctxt "#11150"
-msgid "Own Spotify client ID (optional, reduces waiting times)"
-msgstr "Own Spotify client ID (optional, reduces waiting times)"
 
 msgctxt "#11151"
 msgid "Preload playlists in the background"

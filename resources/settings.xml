@@ -23,7 +23,7 @@
         <setting id="preload_playlists" type="bool" default="true" label="11151">
           <control type="toggle"/>
         </setting>
-        <setting id="own_client_id" type="text" default="" label="11150"/>
+        <setting id="user_client_id" type="text" default="" label="11087"/>
     </category>
 
     <category label="11055">

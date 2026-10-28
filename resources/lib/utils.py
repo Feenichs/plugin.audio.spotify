@@ -25,7 +25,7 @@ KODI_PROPERTY_SPOTIFY_AUTH_TOKEN = "spotify-auth-token"
 KODI_PROPERTY_AUTH_TOKEN_EXPIRES_AT = "spotify-auth-token-expires-at"
 # token of the user's own client id (optional), see spotify_client.py
 KODI_PROPERTY_SPOTIFY_OWN_AUTH_TOKEN = "spotify-own-auth-token"
-OWN_CLIENT_ID_SETTING = "own_client_id"
+OWN_CLIENT_ID_SETTING = "user_client_id"
 PRELOAD_PLAYLISTS_SETTING = "preload_playlists"
 
 

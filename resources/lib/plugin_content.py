@@ -19,6 +19,7 @@ import spotify_client
 import spotipy
 import spotty
 import utils
+from spotipy import SpotifyException
 from spotty_auth import SpottyAuth
 from spotty_helper import SpottyHelper
 from string_ids import *
@@ -75,6 +76,55 @@ TOP_ITEMS_LIMIT = 50
 # Featured playlists and new releases change rarely, but take several requests
 BROWSE_CACHE_EXPIRATION = datetime.timedelta(hours=6)
 PLAYLIST_TAIL_LIMIT = 50
+
+# Only these methods may be called via the plugin URL 'action' parameter.
+ALLOWED_ACTIONS = frozenset(
+    {
+        "add_track_to_playlist",
+        "artist_top_tracks",
+        "authenticate_plugin_request",
+        "browse_album",
+        "browse_artist_everything",
+        "browse_artist_just_albums",
+        "browse_artist_just_albums_and_singles",
+        "browse_artist_just_appears_on",
+        "browse_artist_just_compilations",
+        "browse_artist_just_singles",
+        "browse_category",
+        "browse_followed_artists",
+        "browse_main_explore",
+        "browse_main_library",
+        "browse_new_releases",
+        "browse_playlist",
+        "browse_playlist_tail",
+        "browse_playlists",
+        "browse_saved_albums",
+        "browse_saved_artists",
+        "browse_saved_tracks",
+        "browse_top_artists",
+        "browse_top_tracks",
+        "check_authentication",
+        "delete_cache_db",
+        "follow_artist",
+        "follow_playlist",
+        "play_playlist",
+        "preload_playlists",
+        "refresh_listing",
+        "related_artists",
+        "remove_album",
+        "remove_track",
+        "remove_track_from_playlist",
+        "save_album",
+        "save_track",
+        "search",
+        "search_albums",
+        "search_artists",
+        "search_playlists",
+        "search_tracks",
+        "unfollow_artist",
+        "unfollow_playlist",
+    }
+)
 
 
 def cache_log(msg) -> None:
@@ -153,9 +203,12 @@ class PluginContent:
             self.check_auth_and_refresh_spotipy()
 
             if self.__action:
-                log_msg(f"Evaluating action '{self.__action}'.")
-                action = f"self.{self.__action}"
-                eval(action)()
+                if self.__action not in ALLOWED_ACTIONS:
+                    log_msg(f"Ignoring unknown action '{self.__action}'.", xbmc.LOGWARNING)
+                    xbmcplugin.endOfDirectory(handle=self.__addon_handle, succeeded=False)
+                    return
+                log_msg(f"Running action '{self.__action}'.")
+                getattr(self, self.__action)()
             else:
                 log_msg("Browsing main and setting up precache library.")
                 self.__browse_main()
@@ -187,9 +240,20 @@ class PluginContent:
     def check_auth_and_refresh_spotipy(self):
         auth_token: str = utils.get_cached_auth_token()
         if auth_token:
-            self.init_spotipy(auth_token)
-            return
+            log_msg(f"Got cached auth_token.")
+            try_authenticate = False
+            try:
+                self.init_spotipy(auth_token)
+            except SpotifyException as exc:
+                log_exception(exc, f"HTTPError init_spotipy error: http_status = {exc.http_status}")
+                if exc.http_status == 401:
+                    try_authenticate = True
+            except Exception as exc:
+                log_exception(exc, "PluginContent init_spotipy error")
+            if not try_authenticate:
+                return
 
+        log_msg(f"Cold not get valid cached auth_token. Attempting to authenticate.")
         self.authenticate_plugin_after_login_failure()
 
     def refresh_spotipy(self):
@@ -198,7 +262,7 @@ class PluginContent:
             xbmcplugin.endOfDirectory(handle=self.__addon_handle)
             return
 
-        log_msg(f"Got auth_token '{auth_token}'.")
+        log_msg(f"Got auth_token.")
 
         self.init_spotipy(auth_token)
 

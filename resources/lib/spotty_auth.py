@@ -14,6 +14,8 @@ from utils import log_msg, log_exception, ADDON_ID
 
 ZEROCONF_PORT = 10001
 
+# The add-on's client id, shared by all its users. An own client id can be set
+# in addition, see utils.get_own_client_id() and spotify_client.py.
 CLIENT_ID = "2eb96f9b37494be1824999d58028a305"
 SPOTTY_SCOPE = [
     "user-read-playback-state",
@@ -113,7 +115,7 @@ class SpottyAuth:
         """
         own_auth_token = None
         own_client_id = utils.get_own_client_id()
-        if own_client_id:
+        if own_client_id and own_client_id != CLIENT_ID:
             for _ in range(3):
                 own_auth_token = self.__get_token(own_client_id)
                 if own_auth_token:
