@@ -263,6 +263,9 @@ class HomeWindow(xbmcgui.WindowXML):
             return
         rows = [row for row in self.__filled_rows() if row >= self.__row_offset]
         if rows:
+            # rows above may still be loading, they must not push the focused
+            # row down when they appear
+            self.__set_row_offset(rows[0])
             self.setFocusId(ROW_LISTS[rows[0]])
         else:
             # rows are still loading, focus them once the first is shown
@@ -390,8 +393,9 @@ class HomeWindow(xbmcgui.WindowXML):
                 return
             explore_tabs = data.build_tabs(library, explore, self.__row_labels())
             self.__add_builtin_rows(explore_tabs)
+            changed = explore_tabs[data.TAB_EXPLORE] != self.__tabs.get(data.TAB_EXPLORE)
             self.__tabs[data.TAB_EXPLORE] = explore_tabs[data.TAB_EXPLORE]
-            if self.__current_tab == data.TAB_EXPLORE and not self.__stack:
+            if changed and self.__current_tab == data.TAB_EXPLORE and not self.__stack:
                 self.__remember_focus()
                 self.__show_current()
 
@@ -521,7 +525,11 @@ class HomeWindow(xbmcgui.WindowXML):
             self.__generation += 1
             generation = self.__generation
         self.__row_data = {}
-        self.__row_offset = 0
+        # the rows above a row whose focus is restored stay hidden, they would
+        # be shown and hidden again otherwise
+        restore = self.__restore
+        restore_row = restore and restore[0] in ROW_LISTS
+        self.__row_offset = ROW_LISTS.index(restore[0]) if restore_row else 0
 
         rows = rows[: len(ROW_LISTS)]
         for index, group_id in enumerate(ROW_GROUPS):
@@ -594,6 +602,13 @@ class HomeWindow(xbmcgui.WindowXML):
             shown = len(filled)
             if not self.__stale(generation):
                 self.__focus_from_row = None
+                pending = self.__restore
+                if pending and pending[0] in ROW_LISTS:
+                    # the row to restore the focus in is empty now
+                    self.__restore = None
+                    self.__set_row_offset(0)
+                    if shown and self.getFocusId() != NAV_LIST:
+                        self.__focus_content()
                 self.setProperty("loading", "")
                 if not shown:
                     self.setProperty("empty", "true")
@@ -712,6 +727,9 @@ class HomeWindow(xbmcgui.WindowXML):
         else:
             self.__tab_origin = origin
         page.setdefault("origin", None)
+        # a focus remembered for the previous view must not be restored in a
+        # row of the new page
+        self.__restore = None
         self.__stack.append(page)
         self.__show_current()
 
@@ -1345,6 +1363,7 @@ class HomeWindow(xbmcgui.WindowXML):
         self.__save_search_history(data.add_search_history(self.__load_search_history(), query))
         # focus the first row of results, the first row has the search tiles
         self.__focus_from_row = 1
+        self.__restore = None
         self.__reload_search_tab()
 
     def __reload_search_tab(self):
