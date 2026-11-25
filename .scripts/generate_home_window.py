@@ -727,11 +727,11 @@ WINDOW_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
             </control>
         </control>
 
-        <!-- Header -->
+        <!-- Header, the logo is made for 4K (112 px), so it is not scaled there -->
         <control type="image">
             <left>60</left><top>36</top><width>56</width><height>56</height>
             <aspectratio>keep</aspectratio>
-            <texture>$INFO[Window.Property(icon)]</texture>
+            <texture>sp_logo.png</texture>
         </control>
         <control type="label">
             <left>128</left><top>36</top><width>220</width><height>56</height>

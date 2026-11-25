@@ -155,7 +155,6 @@ class HomeWindow(xbmcgui.WindowXML):
         self.__initialised = True
 
         self.setProperty("hero", "true" if self.__setting_enabled("home_window_hero") else "false")
-        self.setProperty("icon", self.__media_path("icon.png"))
         self.setProperty("view", "tab")
         self.setProperty("empty_label", self.__localize(HOME_WINDOW_EMPTY_STR_ID))
         self.__playing_track_id = self.__current_track_id()
