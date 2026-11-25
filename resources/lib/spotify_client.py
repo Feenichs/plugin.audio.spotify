@@ -18,9 +18,13 @@
     the shared client id.
 """
 
+import logging
 from typing import Any
 
+import requests
 import spotipy
+import xbmc
+from spotipy.util import Retry
 
 import utils
 from utils import log_msg
@@ -153,10 +157,50 @@ class FallbackSpotify:
         )
 
 
-def get_spotify(shared_auth_token: str) -> spotipy.Spotify:
-    """Client for the own client id if there is one, otherwise the shared one"""
-    shared = spotipy.Spotify(auth=shared_auth_token)
+class _RateLimitLogHandler(logging.Handler):
+    """Shows spotipy's rate limit warnings in the Kodi log, they were not shown"""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if "rate/request limit" in record.getMessage():
+            log_msg(record.getMessage(), xbmc.LOGINFO)
+
+
+if not any(isinstance(handler, _RateLimitLogHandler) for handler in logging.getLogger().handlers):
+    logging.getLogger().addHandler(_RateLimitLogHandler(logging.WARNING))
+
+
+def get_spotify(shared_auth_token: str, patient: bool = True) -> spotipy.Spotify:
+    """
+    Client for the own client id if there is one, otherwise the shared one.
+
+    A patient client waits when Spotify's rate limit is reached and asks again,
+    which can take minutes. An impatient one raises a SpotifyException with
+    http_status 429 at once, with Spotify's Retry-After header, for when an
+    older copy can be shown instead. Server errors are retried by both.
+    """
+    shared = _create_client(shared_auth_token, patient)
     own_auth_token = utils.get_own_auth_token()
     if not own_auth_token:
         return shared
-    return FallbackSpotify(spotipy.Spotify(auth=own_auth_token), shared)
+    return FallbackSpotify(_create_client(own_auth_token, patient), shared)
+
+
+def _create_client(auth_token: str, patient: bool) -> spotipy.Spotify:
+    client = spotipy.Spotify(auth=auth_token)
+    if not patient:
+        # urllib3 waits for Retry-After on a 429 even if 429 is not in the
+        # status_forcelist, unless respect_retry_after_header is off.
+        retry = Retry(
+            total=client.retries,
+            connect=None,
+            read=False,
+            allowed_methods=frozenset(["GET", "POST", "PUT", "DELETE"]),
+            status=client.status_retries,
+            backoff_factor=client.backoff_factor,
+            status_forcelist=(500, 502, 503, 504),
+            respect_retry_after_header=False,
+        )
+        adapter = requests.adapters.HTTPAdapter(max_retries=retry)
+        client._session.mount("http://", adapter)
+        client._session.mount("https://", adapter)
+    return client

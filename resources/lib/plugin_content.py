@@ -1,3 +1,4 @@
+import contextlib
 import datetime
 import json
 import math
@@ -5,7 +6,7 @@ import os
 import sys
 import time
 import urllib.parse
-from typing import Any, Dict, List, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, Set, Tuple, Union
 
 import xbmc
 import xbmcaddon
@@ -81,6 +82,14 @@ ALBUM_CACHE_EXPIRATION = datetime.timedelta(days=30)
 # in the cache database, so it survives a restart of Kodi.
 LIBRARY_VERSION_KEY = "spotify.library.version"
 LIBRARY_VERSION_EXPIRATION = datetime.timedelta(days=365)
+# When Spotify's rate limit is reached, lists with an older copy in the cache show
+# that copy at once instead of waiting, and Spotify is not asked again for a while.
+RATE_LIMITED_PROPERTY = "spotify-rate-limited-until"
+# for how long, if Spotify does not say (Retry-After), and at most
+RATE_LIMIT_PAUSE_SECS = 30
+RATE_LIMIT_MAX_PAUSE_SECS = 3600
+# Lists that expire soon keep an extra older copy this long
+STALE_COPY_EXPIRATION = datetime.timedelta(days=30)
 PLAYLIST_TAIL_LIMIT = 50
 
 # Only these methods may be called via the plugin URL 'action' parameter.
@@ -276,6 +285,7 @@ class PluginContent:
         self.init_spotipy(auth_token)
 
     def init_spotipy(self, auth_token: str) -> None:
+        self.__auth_token = auth_token
         self.__spotipy: spotipy.Spotify = spotify_client.get_spotify(auth_token)
         user = self.__get_current_user()
         self.__userid: str = user["id"]
@@ -330,6 +340,9 @@ class PluginContent:
             cached = json.loads(self.__win.getProperty(LIBRARY_TOTALS_PROPERTY) or "{}")
         except ValueError:
             cached = {}
+        old_total = None
+        if cached.get("user") == self.__userid:
+            old_total = cached.get("totals", {}).get(name)
         if (
             cached.get("user") != self.__userid
             or time.time() - cached.get("time", 0) > LIBRARY_TOTALS_MAX_AGE_SECS
@@ -337,9 +350,108 @@ class PluginContent:
             cached = {"user": self.__userid, "time": time.time(), "totals": {}}
         totals = cached["totals"]
         if name not in totals:
-            totals[name] = get_total()
+            # an expired total is still good enough while requests are throttled
+            if old_total is not None and self.__is_rate_limited():
+                return old_total
+            try:
+                with self.__impatient_spotipy(old_total is not None):
+                    totals[name] = get_total()
+            except SpotifyException as exc:
+                if exc.http_status != 429 or old_total is None:
+                    raise
+                self.__set_rate_limited(f"the total of '{name}'", exc)
+                return old_total
             self.__win.setProperty(LIBRARY_TOTALS_PROPERTY, json.dumps(cached))
         return totals[name]
+
+    def __get_library_list_total(self, name: str, get_total, cache_str: str):
+        """
+        (total, None), or (None, older copy of the list) while Spotify throttles
+        requests. Asking for the total must not wait either, when the list was
+        cached before.
+        """
+        stale = self.cache.get(cache_str)
+        if stale is not None and self.__is_rate_limited():
+            log_msg(f"Requests are throttled, showing an older copy of '{cache_str}'.")
+            return None, stale
+        try:
+            with self.__impatient_spotipy(stale is not None):
+                return self.__get_library_total(name, get_total), None
+        except SpotifyException as exc:
+            if exc.http_status != 429 or stale is None:
+                raise
+            self.__set_rate_limited(f"the total of '{name}'", exc)
+            return None, stale
+
+    def __is_rate_limited(self) -> bool:
+        until = self.__win.getProperty(RATE_LIMITED_PROPERTY)
+        try:
+            return float(until) > time.time()
+        except ValueError:
+            return False
+
+    def __set_rate_limited(self, what: str, exc: SpotifyException) -> float:
+        """Remembers for as long as Spotify asks to wait, returns the seconds"""
+        try:
+            seconds = float((exc.headers or {}).get("Retry-After"))
+        except (TypeError, ValueError):
+            seconds = RATE_LIMIT_PAUSE_SECS
+        seconds = min(max(seconds, 1), RATE_LIMIT_MAX_PAUSE_SECS)
+        log_msg(
+            f"Spotify's rate limit is reached for {what}, showing older copies"
+            f" for {seconds:.0f}s instead of waiting.",
+            xbmc.LOGINFO,
+        )
+        self.__win.setProperty(RATE_LIMITED_PROPERTY, str(time.time() + seconds))
+        return seconds
+
+    @contextlib.contextmanager
+    def __impatient_spotipy(self, impatient: bool = True):
+        """
+        Within it, requests do not wait when Spotify's rate limit is reached, but
+        raise a SpotifyException with http_status 429 at once.
+        """
+        if not impatient:
+            yield
+            return
+        patient_spotipy = self.__spotipy
+        self.__spotipy = spotify_client.get_spotify(self.__auth_token, patient=False)
+        try:
+            yield
+        finally:
+            self.__spotipy = patient_spotipy
+
+    def __get_fresh_or_stale(
+        self,
+        cache_str: str,
+        checksum: Any,
+        fetch: Callable[[], Any],
+        expiration: datetime.timedelta = datetime.timedelta(days=30),
+        keep_stale_copy: bool = False,
+    ) -> Any:
+        """
+        The result of fetch(), which is cached. But when Spotify's rate limit is
+        reached and there is an older copy, the older copy is returned at once
+        instead of waiting. The older copy is the cached entry with any checksum,
+        or, for entries which expire soon (keep_stale_copy), an extra copy.
+        """
+        stale_str = f"{cache_str}.stale" if keep_stale_copy else cache_str
+        stale = self.cache.get(stale_str)
+        if stale is not None and self.__is_rate_limited():
+            log_msg(f"Requests are throttled, showing an older copy of '{cache_str}'.")
+            return stale
+        try:
+            with self.__impatient_spotipy(stale is not None):
+                data = fetch()
+        except SpotifyException as exc:
+            if exc.http_status != 429 or stale is None:
+                raise
+            self.__set_rate_limited(f"'{cache_str}'", exc)
+            return stale
+        self.cache.set(cache_str, data, checksum=checksum, expiration=expiration)
+        if keep_stale_copy:
+            self.cache.set(stale_str, data, expiration=STALE_COPY_EXPIRATION)
+        return data
 
     def __clear_library_totals(self) -> None:
         self.__win.clearProperty(LIBRARY_TOTALS_PROPERTY)
@@ -730,10 +842,20 @@ class PluginContent:
 
     def __get_explore_categories(self) -> List[Tuple[Any, str, Union[str, Any]]]:
         cache_str = f"spotify.categories.{self.__user_country}"
-        items = self.cache.get(cache_str)
+        # never empty, simplecache ignores empty checksums
+        checksum = self.__cache_checksum()
+        items = self.cache.get(cache_str, checksum=checksum)
         if items:
             return items
+        return self.__get_fresh_or_stale(
+            cache_str,
+            checksum,
+            self.__fetch_explore_categories,
+            datetime.timedelta(days=1),
+            keep_stale_copy=True,
+        )
 
+    def __fetch_explore_categories(self) -> List[Tuple[Any, str, Union[str, Any]]]:
         items = []
         categories = self.__spotipy.categories(
             country=self.__user_country, limit=50, locale=self.__user_country
@@ -758,8 +880,6 @@ class PluginContent:
                     thumb,
                 )
             )
-        self.cache.set(cache_str, items, expiration=datetime.timedelta(days=1))
-
         return items
 
     def browse_main_explore(self) -> None:
@@ -912,46 +1032,60 @@ class PluginContent:
                 cache_log(f'Retrieved cached playlist details for "{playlist_id}" by snapshot.')
                 return playlist_details
 
+        # A changed playlist was cached before with another checksum. While Spotify
+        # throttles requests, that older copy is shown instead of waiting.
+        stale = self.cache.get(cache_str)
+        if stale and self.__is_rate_limited():
+            log_msg(f"Requests are throttled, showing an older copy of playlist '{playlist_id}'.")
+            return stale
+        try:
+            with self.__impatient_spotipy(bool(stale)):
+                return self.__fetch_playlist_details(playlist_id, cache_str, snapshot)
+        except SpotifyException as exc:
+            if exc.http_status != 429 or not stale:
+                raise
+            self.__set_rate_limited(f"playlist '{playlist_id}'", exc)
+            return stale
+
+    def __fetch_playlist_details(self, playlist_id: str, cache_str: str, snapshot: str) -> Playlist:
         playlist = self.__spotipy.playlist(
             playlist_id, fields="tracks(total),name,owner(id),id", market=self.__user_country
         )
-        # Get from cache first.
-        if not snapshot:
+        if snapshot:
+            checksum = f"{snapshot}-{self.__addon.getSetting('cache_checksum')}"
+            playlist_details = None
+        else:
             checksum = self.__cache_checksum(playlist["tracks"]["total"])
-        # log_msg(f"Playlist cache_str = '{cache_str}', checksum = '{checksum}'.")
-        playlist_details = None if snapshot else self.cache.get(cache_str, checksum=checksum)
+            playlist_details = self.cache.get(cache_str, checksum=checksum)
         if playlist_details:
             cache_log(
                 f'Retrieved {playlist["tracks"]["total"]} cached playlist details'
                 f' for "{playlist["name"]}".'
             )
-        else:
-            # Get listing from api.
-            count = 0
-            playlist_details = playlist
-            playlist_details["tracks"]["items"] = []
-            while playlist["tracks"]["total"] > count:
-                playlist_details["tracks"]["items"] += self.__spotipy.playlist_items(
-                    playlist["id"],
-                    market=self.__user_country,
-                    fields="",
-                    limit=50,
-                    offset=count,
-                )["items"]
-                count += 50
-            playlist_details["tracks"]["items"] = self.__prepare_track_listitems(
-                tracks=playlist_details["tracks"]["items"], playlist_details=playlist
-            )
-            # log_msg(f"playlist_details = {playlist_details}")
-            if not snapshot:
-                checksum = self.__cache_checksum(playlist["tracks"]["total"])
-            self.cache.set(cache_str, playlist_details, checksum=checksum)
-            # log_msg(f"Got new playlist - checksum = '{checksum}'")
-            cache_log(
-                f'Retrieved {playlist["tracks"]["total"]} UNCACHED playlist details'
-                f' for "{playlist["name"]}".'
-            )
+            return playlist_details
 
+        # Get listing from api.
+        playlist_details = playlist
+        items = []
+        while playlist["tracks"]["total"] > len(items):
+            page = self.__spotipy.playlist_items(
+                playlist["id"],
+                market=self.__user_country,
+                fields="",
+                limit=50,
+                offset=len(items),
+            )["items"]
+            if not page:
+                break
+            items += page
+        playlist_details["tracks"]["items"] = self.__prepare_track_listitems(
+            tracks=items, playlist_details=playlist
+        )
+        self.cache.set(cache_str, playlist_details, checksum=checksum)
+        cache_log(
+            f'Retrieved {playlist["tracks"]["total"]} UNCACHED playlist details'
+            f' for "{playlist["name"]}".'
+        )
         return playlist_details
 
     def browse_playlist(self) -> None:
@@ -1108,31 +1242,56 @@ class PluginContent:
                 if not wait(pause if loaded else 0):
                     return
                 log_msg(f"Preloading playlist '{playlist.get('name')}'.")
-                self.__get_playlist_details(playlist["id"], snapshot)
+                while True:
+                    # no waiting for Spotify's rate limit, but a pause, so that
+                    # the user's own clicks get the requests first
+                    try:
+                        with self.__impatient_spotipy():
+                            self.__fetch_playlist_details(
+                                playlist["id"], f"spotify.playlistdetails.{playlist['id']}", snapshot
+                            )
+                        break
+                    except SpotifyException as exc:
+                        if exc.http_status != 429:
+                            raise
+                        seconds = self.__set_rate_limited("preloading the playlists", exc)
+                        # the user's own clicks get the requests first
+                        if not wait(max(seconds, pause)):
+                            return
                 loaded += 1
             log_msg(f"Preloaded {loaded} of {len(playlists)} playlists.")
         finally:
             self.__win.clearProperty(PRELOAD_PROPERTY)
 
     def __get_category(self, categoryid: str) -> Playlist:
-        category = self.__spotipy.category(
-            categoryid, country=self.__user_country, locale=self.__user_country
-        )
-        playlists = self.__spotipy.category_playlists(
-            categoryid, country=self.__user_country, limit=50, offset=0
-        )
-        playlists["category"] = category["name"]
-        count = len(playlists["playlists"]["items"])
-        while playlists["playlists"]["total"] > count:
-            playlists["playlists"]["items"] += self.__spotipy.category_playlists(
-                categoryid, country=self.__user_country, limit=50, offset=count
-            )["playlists"]["items"]
-            count += 50
-        playlists["playlists"]["items"] = self.__prepare_playlist_listitems(
-            playlists["playlists"]["items"]
-        )
+        cache_str = f"spotify.category.{categoryid}.{self.__user_country}"
+        checksum = self.__cache_checksum()
+        playlists = self.cache.get(cache_str, checksum=checksum)
+        if playlists:
+            return playlists
 
-        return playlists
+        def fetch() -> Playlist:
+            category = self.__spotipy.category(
+                categoryid, country=self.__user_country, locale=self.__user_country
+            )
+            result = self.__spotipy.category_playlists(
+                categoryid, country=self.__user_country, limit=50, offset=0
+            )
+            result["category"] = category["name"]
+            count = len(result["playlists"]["items"])
+            while result["playlists"]["total"] > count:
+                result["playlists"]["items"] += self.__spotipy.category_playlists(
+                    categoryid, country=self.__user_country, limit=50, offset=count
+                )["playlists"]["items"]
+                count += 50
+            result["playlists"]["items"] = self.__prepare_playlist_listitems(
+                result["playlists"]["items"]
+            )
+            return result
+
+        return self.__get_fresh_or_stale(
+            cache_str, checksum, fetch, BROWSE_CACHE_EXPIRATION, keep_stale_copy=True
+        )
 
     def browse_category(self) -> None:
         xbmcplugin.setContent(self.__addon_handle, "files")
@@ -1228,22 +1387,24 @@ class PluginContent:
         if playlists:
             return playlists
 
-        playlists = self.__spotipy.featured_playlists(
-            country=self.__user_country, limit=50, offset=0
-        )
-        count = len(playlists["playlists"]["items"])
-        total = playlists["playlists"]["total"]
-        while total > count:
-            playlists["playlists"]["items"] += self.__spotipy.featured_playlists(
-                country=self.__user_country, limit=50, offset=count
-            )["playlists"]["items"]
-            count += 50
-        playlists["playlists"]["items"] = self.__prepare_playlist_listitems(
-            playlists["playlists"]["items"]
-        )
-        self.cache.set(cache_str, playlists, checksum=checksum, expiration=BROWSE_CACHE_EXPIRATION)
+        def fetch() -> Playlist:
+            result = self.__spotipy.featured_playlists(
+                country=self.__user_country, limit=50, offset=0
+            )
+            count = len(result["playlists"]["items"])
+            while result["playlists"]["total"] > count:
+                result["playlists"]["items"] += self.__spotipy.featured_playlists(
+                    country=self.__user_country, limit=50, offset=count
+                )["playlists"]["items"]
+                count += 50
+            result["playlists"]["items"] = self.__prepare_playlist_listitems(
+                result["playlists"]["items"]
+            )
+            return result
 
-        return playlists
+        return self.__get_fresh_or_stale(
+            cache_str, checksum, fetch, BROWSE_CACHE_EXPIRATION, keep_stale_copy=True
+        )
 
     def __get_user_playlists(self, userid):
         cache_str = f"spotify.userplaylists.{userid}"
@@ -1265,15 +1426,21 @@ class PluginContent:
                 return self.__spotipy.user_playlists(userid, limit=50, offset=offset)
 
             fallback_str = f"spotify.userplaylists.complete.{userid}"
+            fallback = self.cache.get(fallback_str)
+            if fallback and self.__is_rate_limited():
+                log_msg(f"Requests are throttled, showing the last listing of '{userid}'.")
+                return fallback
             try:
-                page = get_page(0)
-                items = page["items"]
-                for offset in range(50, page["total"], 50):
-                    items += get_page(offset)["items"]
+                with self.__impatient_spotipy(bool(fallback)):
+                    page = get_page(0)
+                    items = page["items"]
+                    for offset in range(50, page["total"], 50):
+                        items += get_page(offset)["items"]
             except spotipy.SpotifyException as exc:
-                fallback = self.cache.get(fallback_str, checksum=fallback_checksum)
                 if not fallback:
                     raise
+                if exc.http_status == 429:
+                    self.__set_rate_limited(f"the playlists of '{userid}'", exc)
                 log_msg(
                     f"Listing the playlists of user '{userid}' failed ({exc.http_status}),"
                     f" using the last complete listing of {len(fallback)} playlists."
@@ -1293,7 +1460,7 @@ class PluginContent:
                     expiration=USER_PLAYLISTS_FALLBACK_EXPIRATION,
                 )
             else:
-                fallback = self.cache.get(fallback_str, checksum=fallback_checksum)
+                fallback = self.cache.get(fallback_str)
                 if fallback:
                     log_msg(
                         f"Got only {len(items)} of {page['total']} playlists for user"
@@ -1314,11 +1481,14 @@ class PluginContent:
     def __get_curuser_playlistids(self) -> List[str]:
         # Needed for the context menus of every playlist listing, so the total is
         # kept for a while like the other library totals.
-        total = self.__get_library_total(
+        cache_str = f"spotify.userplaylistids.{self.__userid}"
+        total, stale = self.__get_library_list_total(
             "playlists",
             lambda: self.__spotipy.current_user_playlists(limit=1, offset=0)["total"],
+            cache_str,
         )
-        cache_str = f"spotify.userplaylistids.{self.__userid}"
+        if total is None:
+            return stale
         checksum = self.__library_checksum(total)
         playlist_ids = self.cache.get(cache_str, checksum=checksum)
         # an incomplete list may have been cached by earlier versions
@@ -1327,12 +1497,22 @@ class PluginContent:
                 f'Retrieved {len(playlist_ids)} cached playlist ids for user "{self.__userid}".'
             )
         else:
+            stale = self.cache.get(cache_str)
+            if stale and self.__is_rate_limited():
+                return stale
             playlist_ids = []
-            for offset in range(0, total, 50):
-                page = self.__spotipy.current_user_playlists(limit=50, offset=offset)["items"]
-                if not page:
-                    break
-                playlist_ids += [playlist["id"] for playlist in page if playlist]
+            try:
+                with self.__impatient_spotipy(bool(stale)):
+                    for offset in range(0, total, 50):
+                        page = self.__spotipy.current_user_playlists(limit=50, offset=offset)
+                        if not page["items"]:
+                            break
+                        playlist_ids += [playlist["id"] for playlist in page["items"] if playlist]
+            except SpotifyException as exc:
+                if exc.http_status != 429 or not stale:
+                    raise
+                self.__set_rate_limited("the own playlist ids", exc)
+                return stale
             # Spotify may return only part of the playlists while requests are
             # throttled, see USER_PLAYLISTS_FALLBACK_EXPIRATION
             if len(playlist_ids) >= total:
@@ -1369,21 +1549,20 @@ class PluginContent:
         if albums:
             return albums
 
-        albums = self.__spotipy.new_releases(country=self.__user_country, limit=50, offset=0)
-        count = len(albums["albums"]["items"])
-        while albums["albums"]["total"] > count:
-            albums["albums"]["items"] += self.__spotipy.new_releases(
-                country=self.__user_country, limit=50, offset=count
-            )["albums"]["items"]
-            count += 50
+        def fetch() -> List[Dict[str, Any]]:
+            result = self.__spotipy.new_releases(country=self.__user_country, limit=50, offset=0)
+            count = len(result["albums"]["items"])
+            while result["albums"]["total"] > count:
+                result["albums"]["items"] += self.__spotipy.new_releases(
+                    country=self.__user_country, limit=50, offset=count
+                )["albums"]["items"]
+                count += 50
+            album_ids = [album["id"] for album in result["albums"]["items"]]
+            return self.__prepare_album_listitems(album_ids)
 
-        album_ids = []
-        for album in albums["albums"]["items"]:
-            album_ids.append(album["id"])
-        albums = self.__prepare_album_listitems(album_ids)
-        self.cache.set(cache_str, albums, checksum=checksum, expiration=BROWSE_CACHE_EXPIRATION)
-
-        return albums
+        return self.__get_fresh_or_stale(
+            cache_str, checksum, fetch, BROWSE_CACHE_EXPIRATION, keep_stale_copy=True
+        )
 
     def browse_new_releases(self) -> None:
         xbmcplugin.setContent(self.__addon_handle, "albums")
@@ -1956,24 +2135,26 @@ class PluginContent:
             xbmc.executebuiltin(f"Container.SetViewMode({self.default_view_albums})")
 
     def __get_saved_album_ids(self) -> List[str]:
-        total = self.__get_library_total(
+        cache_str = f"spotify-savedalbumids.{self.__userid}"
+        total, stale = self.__get_library_list_total(
             "saved_albums",
             lambda: self.__spotipy.current_user_saved_albums(limit=1, offset=0)["total"],
+            cache_str,
         )
-        cache_str = f"spotify-savedalbumids.{self.__userid}"
+        if total is None:
+            return stale
         checksum = self.__library_checksum(total)
         album_ids = self.cache.get(cache_str, checksum=checksum)
         if album_ids:
             cache_log(f'Retrieved {len(album_ids)} cached album ids for user "{self.__userid}".')
             return album_ids
 
-        albums = self.__fetch_saved_albums(total)
-        album_ids = [album["id"] for album in albums]
-        if album_ids:
-            self.cache.set(cache_str, album_ids, checksum=checksum)
-            cache_log(
-                f'Retrieved {_get_len(album_ids)} UNCACHED album ids for user "{self.__userid}".'
-            )
+        album_ids = self.__get_fresh_or_stale(
+            cache_str,
+            checksum,
+            lambda: [album["id"] for album in self.__fetch_saved_albums(total)],
+        )
+        cache_log(f'Retrieved {_get_len(album_ids)} UNCACHED album ids for user "{self.__userid}".')
 
         return album_ids
 
@@ -1997,11 +2178,14 @@ class PluginContent:
         if albums:
             cache_log(f'Retrieved {len(albums)} cached albums for user "{self.__userid}".')
         else:
-            full_albums = self.__fetched_saved_albums
-            if full_albums is None:
-                full_albums = self.__fetch_saved_albums(len(album_ids))
-            albums = self.__prepare_album_listitems(albums=full_albums)
-            self.cache.set(cache_str, albums, checksum=checksum)
+
+            def fetch() -> List[Dict[str, Any]]:
+                full_albums = self.__fetched_saved_albums
+                if full_albums is None:
+                    full_albums = self.__fetch_saved_albums(len(album_ids))
+                return self.__prepare_album_listitems(albums=full_albums)
+
+            albums = self.__get_fresh_or_stale(cache_str, checksum, fetch)
             cache_log(f'Retrieved {_get_len(albums)} UNCACHED albums for user "{self.__userid}".')
         return albums
 
@@ -2022,13 +2206,16 @@ class PluginContent:
             xbmc.executebuiltin(f"Container.SetViewMode({self.default_view_albums})")
 
     def __get_saved_track_ids(self) -> List[str]:
-        total = self.__get_library_total(
+        cache_str = f"spotify.savedtracksids.{self.__userid}"
+        total, stale = self.__get_library_list_total(
             "saved_tracks",
             lambda: self.__spotipy.current_user_saved_tracks(
                 limit=1, offset=0, market=self.__user_country
             )["total"],
+            cache_str,
         )
-        cache_str = f"spotify.savedtracksids.{self.__userid}"
+        if total is None:
+            return stale
         checksum = self.__library_checksum(total)
         track_ids = self.cache.get(cache_str, checksum=checksum)
         if track_ids:
@@ -2038,8 +2225,11 @@ class PluginContent:
             return track_ids
 
         # Get from api.
-        track_ids = [track["id"] for track in self.__fetch_saved_tracks(total)]
-        self.cache.set(cache_str, track_ids, checksum=checksum)
+        track_ids = self.__get_fresh_or_stale(
+            cache_str,
+            checksum,
+            lambda: [track["id"] for track in self.__fetch_saved_tracks(total)],
+        )
         cache_log(
             f'Retrieved {_get_len(track_ids)} UNCACHED saved track ids for user "{self.__userid}".'
         )
@@ -2071,11 +2261,14 @@ class PluginContent:
             cache_log(f'Retrieved {len(tracks)} cached saved tracks for user "{self.__userid}".')
         else:
             # Get from api.
-            full_tracks = self.__fetched_saved_tracks
-            if full_tracks is None:
-                full_tracks = self.__fetch_saved_tracks(len(track_ids))
-            tracks = self.__prepare_track_listitems(tracks=full_tracks)
-            self.cache.set(cache_str, tracks, checksum=checksum)
+
+            def fetch() -> List[Dict[str, Any]]:
+                full_tracks = self.__fetched_saved_tracks
+                if full_tracks is None:
+                    full_tracks = self.__fetch_saved_tracks(len(track_ids))
+                return self.__prepare_track_listitems(tracks=full_tracks)
+
+            tracks = self.__get_fresh_or_stale(cache_str, checksum, fetch)
             cache_log(
                 f'Retrieved {_get_len(tracks)} UNCACHED saved tracks for user "{self.__userid}".'
             )
@@ -2103,20 +2296,26 @@ class PluginContent:
         if artists:
             cache_log(f'Retrieved {len(artists)} cached saved artists for user "{self.__userid}".')
         else:
-            all_artist_ids = []
-            artists = []
-            # extract the artists from all saved albums
-            for item in saved_albums:
-                for artist in item["artists"]:
-                    if artist["id"] not in all_artist_ids:
-                        all_artist_ids.append(artist["id"])
-            for chunk in get_chunks(all_artist_ids, 50):
-                artists += self.__prepare_artist_listitems(self.__spotipy.artists(chunk)["artists"])
-            # append artists that are followed
-            for artist in followed_artists:
-                if not artist["id"] in all_artist_ids:
-                    artists.append(artist)
-            self.cache.set(cache_str, artists, checksum=checksum)
+
+            def fetch() -> List[Dict[str, Any]]:
+                all_artist_ids = []
+                result = []
+                # extract the artists from all saved albums
+                for item in saved_albums:
+                    for artist in item["artists"]:
+                        if artist["id"] not in all_artist_ids:
+                            all_artist_ids.append(artist["id"])
+                for chunk in get_chunks(all_artist_ids, 50):
+                    result += self.__prepare_artist_listitems(
+                        self.__spotipy.artists(chunk)["artists"]
+                    )
+                # append artists that are followed
+                for artist in followed_artists:
+                    if not artist["id"] in all_artist_ids:
+                        result.append(artist)
+                return result
+
+            artists = self.__get_fresh_or_stale(cache_str, checksum, fetch)
             cache_log(
                 f'Retrieved {_get_len(artists)} UNCACHED saved artists for user "{self.__userid}".'
             )
@@ -2136,12 +2335,15 @@ class PluginContent:
             xbmc.executebuiltin(f"Container.SetViewMode({self.default_view_artists})")
 
     def __get_followed_artists(self) -> List[Dict[str, Any]]:
-        total = self.__get_library_total(
+        cache_str = f"spotify.followedartists.{self.__userid}"
+        total, stale = self.__get_library_list_total(
             "followed_artists",
             lambda: self.__spotipy.current_user_followed_artists(limit=1)["artists"]["total"],
+            cache_str,
         )
+        if total is None:
+            return stale
         checksum = self.__library_checksum(total)
-        cache_str = f"spotify.followedartists.{self.__userid}"
 
         cached_artists = self.cache.get(cache_str, checksum=checksum)
         if cached_artists:
@@ -2150,16 +2352,20 @@ class PluginContent:
                 f'Retrieved {len(artists)} cached followed artists for user "{self.__userid}".'
             )
         else:
-            artists = self.__spotipy.current_user_followed_artists(limit=50)
-            count = len(artists["artists"]["items"])
-            after = artists["artists"]["cursors"]["after"]
-            while artists["artists"]["total"] > count:
-                result = self.__spotipy.current_user_followed_artists(limit=50, after=after)
-                artists["artists"]["items"] += result["artists"]["items"]
+
+            def fetch() -> List[Dict[str, Any]]:
+                result = self.__spotipy.current_user_followed_artists(limit=50)
+                items = result["artists"]["items"]
                 after = result["artists"]["cursors"]["after"]
-                count += 50
-            artists = self.__prepare_artist_listitems(artists["artists"]["items"])
-            self.cache.set(cache_str, artists, checksum=checksum)
+                while result["artists"]["total"] > len(items) and after:
+                    result = self.__spotipy.current_user_followed_artists(limit=50, after=after)
+                    if not result["artists"]["items"]:
+                        break
+                    items += result["artists"]["items"]
+                    after = result["artists"]["cursors"]["after"]
+                return self.__prepare_artist_listitems(items)
+
+            artists = self.__get_fresh_or_stale(cache_str, checksum, fetch)
             cache_log(
                 f'Retrieved {_get_len(artists)} UNCACHED followed artists for user "{self.__userid}".'
             )
@@ -2353,17 +2559,27 @@ class PluginContent:
             )
 
     def __precache_library(self) -> None:
-        if not self.__win.getProperty("Spotify.PreCachedItems"):
-            monitor = xbmc.Monitor()
-            self.__win.setProperty("Spotify.PreCachedItems", "busy")
-            # playlists are preloaded paced, in the background
-            utils.start_preloading_playlists()
-            self.__get_saved_albums()
-            if monitor.abortRequested():
-                return
-            self.__get_saved_artists()
-            if monitor.abortRequested():
-                return
-            self.__get_saved_tracks()
-            del monitor
-            self.__win.setProperty("Spotify.PreCachedItems", "done")
+        if self.__win.getProperty("Spotify.PreCachedItems") or self.__is_rate_limited():
+            return
+        monitor = xbmc.Monitor()
+        self.__win.setProperty("Spotify.PreCachedItems", "busy")
+        # playlists are preloaded paced, in the background
+        utils.start_preloading_playlists()
+        # Background work must not wait for Spotify's rate limit, the waiting
+        # would use up the requests the user's own clicks need.
+        finished = False
+        try:
+            with self.__impatient_spotipy():
+                for step in (self.__get_saved_albums, self.__get_saved_artists):
+                    step()
+                    if monitor.abortRequested():
+                        return
+                self.__get_saved_tracks()
+            finished = True
+        except SpotifyException as exc:
+            if exc.http_status != 429:
+                raise
+            self.__set_rate_limited("preloading the library", exc)
+        finally:
+            # if not finished, the next visit of the main menu tries again
+            self.__win.setProperty("Spotify.PreCachedItems", "done" if finished else "")
