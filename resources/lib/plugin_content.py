@@ -75,6 +75,8 @@ PRELOAD_PAUSE_OWN_CLIENT_ID_SECS = 3
 TOP_ITEMS_LIMIT = 50
 # Featured playlists and new releases change rarely, but take several requests
 BROWSE_CACHE_EXPIRATION = datetime.timedelta(hours=6)
+# albums do not change
+ALBUM_CACHE_EXPIRATION = datetime.timedelta(days=30)
 PLAYLIST_TAIL_LIMIT = 50
 
 # Only these methods may be called via the plugin URL 'action' parameter.
@@ -163,6 +165,9 @@ class PluginContent:
     __base_url = sys.argv[0]
     __addon_handle = int(sys.argv[1])
     __cached_checksum = ""
+    # full objects fetched with the saved track / album ids in this run
+    __fetched_saved_tracks = None
+    __fetched_saved_albums = None
     __last_playlist_position = 0
 
     def __init__(self):
@@ -775,15 +780,15 @@ class PluginContent:
                 f'Retrieved {album["tracks"]["total"]} cached tracks for album "{album["name"]}".'
             )
         else:
-            track_ids = []
-            count = 0
-            while album["tracks"]["total"] > count:
+            # The album already has the first page of its tracks. Only fetch the rest.
+            track_ids = [track["id"] for track in album["tracks"].get("items", [])]
+            while album["tracks"]["total"] > len(track_ids):
                 tracks = self.__spotipy.album_tracks(
-                    album["id"], market=self.__user_country, limit=50, offset=count
+                    album["id"], market=self.__user_country, limit=50, offset=len(track_ids)
                 )["items"]
-                for track in tracks:
-                    track_ids.append(track["id"])
-                count += 50
+                if not tracks:
+                    break
+                track_ids += [track["id"] for track in tracks]
             album_tracks = self.__prepare_track_listitems(track_ids, album_details=album)
             self.cache.set(cache_str, album_tracks, checksum=checksum)
             cache_log(
@@ -792,9 +797,20 @@ class PluginContent:
 
         return album_tracks
 
+    def __get_album(self, album_id: str) -> Dict[str, Any]:
+        # Albums do not change, so do not ask Spotify again on every visit.
+        cache_str = f"spotify.album.{album_id}"
+        checksum = self.__addon.getSetting("cache_checksum")
+        album = self.cache.get(cache_str, checksum=checksum)
+        if album:
+            return album
+        album = self.__spotipy.album(album_id, market=self.__user_country)
+        self.cache.set(cache_str, album, checksum=checksum, expiration=ALBUM_CACHE_EXPIRATION)
+        return album
+
     def browse_album(self) -> None:
         xbmcplugin.setContent(self.__addon_handle, "songs")
-        album = self.__spotipy.album(self.__album_id, market=self.__user_country)
+        album = self.__get_album(self.__album_id)
         xbmcplugin.setProperty(self.__addon_handle, "FolderName", album["name"])
         tracks = self.__get_album_tracks(album)
         if album.get("album_type") == "compilation":
@@ -1927,11 +1943,8 @@ class PluginContent:
             cache_log(f'Retrieved {len(album_ids)} cached album ids for user "{self.__userid}".')
             return album_ids
 
-        album_ids = []
-        for offset in range(0, total, 50):
-            albums = self.__spotipy.current_user_saved_albums(limit=50, offset=offset)
-            for album in albums["items"]:
-                album_ids.append(album["album"]["id"])
+        albums = self.__fetch_saved_albums(total)
+        album_ids = [album["id"] for album in albums]
         if album_ids:
             self.cache.set(cache_str, album_ids, checksum=checksum)
             cache_log(
@@ -1939,6 +1952,18 @@ class PluginContent:
             )
 
         return album_ids
+
+    def __fetch_saved_albums(self, total: int) -> List[Dict[str, Any]]:
+        # The saved albums come as full album objects, 50 per request. Keep them for
+        # __get_saved_albums, so they are not fetched again in chunks of 20.
+        albums = []
+        for offset in range(0, total, 50):
+            page = self.__spotipy.current_user_saved_albums(limit=50, offset=offset)["items"]
+            if not page:
+                break
+            albums += [item["album"] for item in page if item.get("album")]
+        self.__fetched_saved_albums = albums
+        return albums
 
     def __get_saved_albums(self) -> List[Dict[str, Any]]:
         album_ids = self.__get_saved_album_ids()
@@ -1948,7 +1973,10 @@ class PluginContent:
         if albums:
             cache_log(f'Retrieved {len(albums)} cached albums for user "{self.__userid}".')
         else:
-            albums = self.__prepare_album_listitems(album_ids)
+            full_albums = self.__fetched_saved_albums
+            if full_albums is None:
+                full_albums = self.__fetch_saved_albums(len(album_ids))
+            albums = self.__prepare_album_listitems(albums=full_albums)
             self.cache.set(cache_str, albums, checksum=checksum)
             cache_log(f'Retrieved {_get_len(albums)} UNCACHED albums for user "{self.__userid}".')
         return albums
@@ -1985,19 +2013,27 @@ class PluginContent:
             return track_ids
 
         # Get from api.
-        track_ids = []
-        for offset in range(0, total, 50):
-            saved_tracks = self.__spotipy.current_user_saved_tracks(
-                limit=50, offset=offset, market=self.__user_country
-            )
-            for track in saved_tracks["items"]:
-                track_ids.append(track["track"]["id"])
+        track_ids = [track["id"] for track in self.__fetch_saved_tracks(total)]
         self.cache.set(cache_str, track_ids, checksum=total)
         cache_log(
             f'Retrieved {_get_len(track_ids)} UNCACHED saved track ids for user "{self.__userid}".'
         )
 
         return track_ids
+
+    def __fetch_saved_tracks(self, total: int) -> List[Dict[str, Any]]:
+        # The saved tracks come as full track objects, 50 per request. Keep them for
+        # __get_saved_tracks, so they are not fetched again in chunks of 20.
+        tracks = []
+        for offset in range(0, total, 50):
+            page = self.__spotipy.current_user_saved_tracks(
+                limit=50, offset=offset, market=self.__user_country
+            )["items"]
+            if not page:
+                break
+            tracks += [item["track"] for item in page if item.get("track")]
+        self.__fetched_saved_tracks = tracks
+        return tracks
 
     def __get_saved_tracks(self):
         # Get from cache first.
@@ -2009,7 +2045,10 @@ class PluginContent:
             cache_log(f'Retrieved {len(tracks)} cached saved tracks for user "{self.__userid}".')
         else:
             # Get from api.
-            tracks = self.__prepare_track_listitems(track_ids)
+            full_tracks = self.__fetched_saved_tracks
+            if full_tracks is None:
+                full_tracks = self.__fetch_saved_tracks(len(track_ids))
+            tracks = self.__prepare_track_listitems(tracks=full_tracks)
             self.cache.set(cache_str, tracks, checksum=len(track_ids))
             cache_log(
                 f'Retrieved {_get_len(tracks)} UNCACHED saved tracks for user "{self.__userid}".'
