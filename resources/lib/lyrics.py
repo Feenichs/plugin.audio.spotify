@@ -1,5 +1,5 @@
 """
-    plugin.audio.spotify
+    plugin.audio.spotify.tv
     lyrics.py
     Lyrics of the playing track for the TV interface. This module has no Kodi
     dependencies.
@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-USER_AGENT = "plugin.audio.spotify TV interface (https://github.com/Feenichs/plugin.audio.spotify)"
+USER_AGENT = "plugin.audio.spotify.tv TV interface (https://github.com/Feenichs/plugin.audio.spotify)"
 TIMEOUT_SECS = 10
 # LRCLIB answers "ServerOverloaded" when busy
 RETRIES = 2

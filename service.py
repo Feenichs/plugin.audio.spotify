@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-    plugin.audio.spotify
+    plugin.audio.spotify.tv
     Spotify player for Kodi
     Main service entry point
 """

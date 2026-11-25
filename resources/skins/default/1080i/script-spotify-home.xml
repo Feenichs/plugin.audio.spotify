@@ -297,7 +297,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -393,7 +393,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -516,7 +516,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -612,7 +612,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -735,7 +735,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -831,7 +831,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -954,7 +954,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -1050,7 +1050,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -1173,7 +1173,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -1269,7 +1269,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -1392,7 +1392,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -1488,7 +1488,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -1611,7 +1611,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -1707,7 +1707,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -1830,7 +1830,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -1926,7 +1926,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -2054,7 +2054,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -2150,7 +2150,7 @@
                 <align>center</align><aligny>center</aligny>
                 <font>font30_title</font>
                 <textcolor>FFFFFFFF</textcolor>
-                <label>$ADDON[plugin.audio.spotify 11109]  &#x203A;</label>
+                <label>$ADDON[plugin.audio.spotify.tv 11109]  &#x203A;</label>
                 <visible>String.IsEqual(ListItem.Property(tile),all)</visible>
             </control>
             <control type="label">
@@ -2553,7 +2553,7 @@
             <align>center</align>
             <font>font13</font>
             <textcolor>FFB3B3B3</textcolor>
-            <label>$ADDON[plugin.audio.spotify 11110]</label>
+            <label>$ADDON[plugin.audio.spotify.tv 11110]</label>
             <visible>String.IsEqual(Window.Property(loading),true)</visible>
             <animation effect="fade" start="100" end="40" time="800" pulse="true" condition="true">Conditional</animation>
         </control>

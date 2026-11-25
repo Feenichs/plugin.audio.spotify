@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-    plugin.audio.spotify
+    plugin.audio.spotify.tv
     Unofficial Spotify client for Kodi
 """
 

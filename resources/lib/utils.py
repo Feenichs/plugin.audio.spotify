@@ -15,16 +15,20 @@ import xbmcvfs
 from xbmc import LOGDEBUG, LOGINFO, LOGERROR
 
 DEBUG = True
-PROXY_PORT = 52308
+# not the port of the original add-on (52308), both may be installed
+PROXY_PORT = 52318
 
-ADDON_ID = "plugin.audio.spotify"
+ADDON_ID = "plugin.audio.spotify.tv"
 ADDON_DATA_PATH = xbmcvfs.translatePath(f"special://profile/addon_data/{ADDON_ID}")
 ADDON_WINDOW_ID = 10000
+# Properties of the window above are shared by all add-ons, also by the original
+# Spotify add-on, so their names start with the add-on id.
+PROPERTY_PREFIX = f"{ADDON_ID}-"
 
-KODI_PROPERTY_SPOTIFY_AUTH_TOKEN = "spotify-auth-token"
-KODI_PROPERTY_AUTH_TOKEN_EXPIRES_AT = "spotify-auth-token-expires-at"
+KODI_PROPERTY_SPOTIFY_AUTH_TOKEN = f"{PROPERTY_PREFIX}auth-token"
+KODI_PROPERTY_AUTH_TOKEN_EXPIRES_AT = f"{PROPERTY_PREFIX}auth-token-expires-at"
 # token of the user's own client id (optional), see spotify_client.py
-KODI_PROPERTY_SPOTIFY_OWN_AUTH_TOKEN = "spotify-own-auth-token"
+KODI_PROPERTY_SPOTIFY_OWN_AUTH_TOKEN = f"{PROPERTY_PREFIX}own-auth-token"
 OWN_CLIENT_ID_SETTING = "user_client_id"
 PRELOAD_PLAYLISTS_SETTING = "preload_playlists"
 

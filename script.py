@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-    plugin.audio.spotify
-    Script entry point, opens the TV interface: RunScript(plugin.audio.spotify,home)
-    RunScript(plugin.audio.spotify,restart_track) is used by the service, see
+    plugin.audio.spotify.tv
+    Script entry point, opens the TV interface: RunScript(plugin.audio.spotify.tv,home)
+    RunScript(plugin.audio.spotify.tv,restart_track) is used by the service, see
     resources/lib/video_player_guard.py
 """
 

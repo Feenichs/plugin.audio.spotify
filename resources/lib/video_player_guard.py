@@ -1,5 +1,5 @@
 """
-    plugin.audio.spotify
+    plugin.audio.spotify.tv
     Spotify player for Kodi
     video_player_guard.py
     Restarts a track that Kodi opened in a running video player.
@@ -75,7 +75,7 @@ class VideoPlayerGuard(xbmc.Player):
 
 
 def restart_track() -> None:
-    """Called by RunScript(plugin.audio.spotify,restart_track,<position>,<path>)"""
+    """Called by RunScript(plugin.audio.spotify.tv,restart_track,<position>,<path>)"""
     try:
         position = int(sys.argv[2])
         path = sys.argv[3]

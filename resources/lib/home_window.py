@@ -1,5 +1,5 @@
 """
-    plugin.audio.spotify
+    plugin.audio.spotify.tv
     home_window.py
     TV interface: a full-screen window with tabs and rows of tiles, made for
     remote controls. The content is listed from the plugin via JSON-RPC.
@@ -61,9 +61,9 @@ SCROLL_STEPS = 40
 ROW_WORKERS = 3
 AUTH_WAIT_SECONDS = 10
 
-HOME_WINDOW_ACTIVE = "spotify_home_window_active"
+HOME_WINDOW_ACTIVE = f"{utils.PROPERTY_PREFIX}home-window-active"
 # the current user, kept by the plugin, see PluginContent.__get_current_user
-CURRENT_USER_PROPERTY = "spotify-current-user"
+CURRENT_USER_PROPERTY = f"{utils.PROPERTY_PREFIX}current-user"
 USER_WAIT_SECONDS = 20
 SEARCH_HISTORY_FILE = os.path.join(utils.ADDON_DATA_PATH, "search_history.json")
 LYRICS_DIR = os.path.join(utils.ADDON_DATA_PATH, "lyrics")

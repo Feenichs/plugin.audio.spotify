@@ -104,7 +104,8 @@ class SimpleCache(object):
             we use window properties because we need to be stateless
         '''
         result = None
-        cachedata = self._win.getProperty(endpoint)
+        # prefixed, the window is shared with other add-ons using simplecache
+        cachedata = self._win.getProperty("%s.%s" % (self.addon_id, endpoint))
 
         if cachedata:
             cachedata = self._loads(cachedata)
@@ -119,7 +120,7 @@ class SimpleCache(object):
             usefull for (stateless) plugins
         '''
         cachedata = (expires, data, checksum)
-        self._win.setProperty(endpoint, json.dumps(cachedata))
+        self._win.setProperty("%s.%s" % (self.addon_id, endpoint), json.dumps(cachedata))
 
 
     def _get_db_cache(self, endpoint, checksum, cur_time, json_data):

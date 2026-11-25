@@ -21,7 +21,7 @@ SKIN = os.path.join(ROOT, "resources", "skins", "default")
 XML_PATH = os.path.join(SKIN, "1080i", "script-spotify-home.xml")
 MEDIA = os.path.join(SKIN, "media")
 
-ADDON = "plugin.audio.spotify"
+ADDON = "plugin.audio.spotify.tv"
 NUM_ROWS = 8
 
 # Colours (AARRGGBB)

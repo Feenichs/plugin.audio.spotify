@@ -1,5 +1,5 @@
 """
-    plugin.audio.spotify
+    plugin.audio.spotify.tv
     spotify_client.py
     Spotify Web API client for the user's own client id, with a fallback to the
     add-on's shared client id.

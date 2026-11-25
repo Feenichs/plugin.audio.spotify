@@ -44,11 +44,11 @@ DO_CACHE_LOGGING = False
 # Every plugin call needs the current user and the totals of the user's library
 # (used as cache checksums). They are kept in window properties, as each
 # Spotify request takes time and too many requests get throttled.
-CURRENT_USER_PROPERTY = "spotify-current-user"
+CURRENT_USER_PROPERTY = f"{utils.PROPERTY_PREFIX}current-user"
 # The user is also kept in a file, so that the first listing after Kodi
 # starts needs no request for it. It is renewed when the user signs in.
 CURRENT_USER_FILE = os.path.join(utils.ADDON_DATA_PATH, "current_user.json")
-LIBRARY_TOTALS_PROPERTY = "spotify-library-totals"
+LIBRARY_TOTALS_PROPERTY = f"{utils.PROPERTY_PREFIX}library-totals"
 LIBRARY_TOTALS_MAX_AGE_SECS = 600
 # Spotify throttles requests per app, so even single requests can take
 # seconds. The user's playlists are kept for a while, and the content of a
@@ -65,8 +65,8 @@ USER_PLAYLISTS_FALLBACK_EXPIRATION = datetime.timedelta(days=30)
 # opening them needs no request. Preloading pauses while the user browses and
 # between playlists, as its requests are throttled like the user's.
 PLAYLIST_USAGE_FILE = os.path.join(utils.ADDON_DATA_PATH, "playlist_usage.json")
-LAST_REQUEST_PROPERTY = "spotify-last-request"
-PRELOAD_PROPERTY = "spotify-preload-heartbeat"
+LAST_REQUEST_PROPERTY = f"{utils.PROPERTY_PREFIX}last-request"
+PRELOAD_PROPERTY = f"{utils.PROPERTY_PREFIX}preload-heartbeat"
 # a preload run that did not report for so long has ended (e.g. crashed)
 PRELOAD_STALE_SECS = 300
 PRELOAD_IDLE_SECS = 20
@@ -84,7 +84,8 @@ LIBRARY_VERSION_KEY = "spotify.library.version"
 LIBRARY_VERSION_EXPIRATION = datetime.timedelta(days=365)
 # When Spotify's rate limit is reached, lists with an older copy in the cache show
 # that copy at once instead of waiting, and Spotify is not asked again for a while.
-RATE_LIMITED_PROPERTY = "spotify-rate-limited-until"
+RATE_LIMITED_PROPERTY = f"{utils.PROPERTY_PREFIX}rate-limited-until"
+PRECACHED_PROPERTY = f"{utils.PROPERTY_PREFIX}precached-items"
 # for how long, if Spotify does not say (Retry-After), and at most
 RATE_LIMIT_PAUSE_SECS = 30
 RATE_LIMIT_MAX_PAUSE_SECS = 3600
@@ -2559,10 +2560,10 @@ class PluginContent:
             )
 
     def __precache_library(self) -> None:
-        if self.__win.getProperty("Spotify.PreCachedItems") or self.__is_rate_limited():
+        if self.__win.getProperty(PRECACHED_PROPERTY) or self.__is_rate_limited():
             return
         monitor = xbmc.Monitor()
-        self.__win.setProperty("Spotify.PreCachedItems", "busy")
+        self.__win.setProperty(PRECACHED_PROPERTY, "busy")
         # playlists are preloaded paced, in the background
         utils.start_preloading_playlists()
         # Background work must not wait for Spotify's rate limit, the waiting
@@ -2582,4 +2583,4 @@ class PluginContent:
             self.__set_rate_limited("preloading the library", exc)
         finally:
             # if not finished, the next visit of the main menu tries again
-            self.__win.setProperty("Spotify.PreCachedItems", "done" if finished else "")
+            self.__win.setProperty(PRECACHED_PROPERTY, "done" if finished else "")

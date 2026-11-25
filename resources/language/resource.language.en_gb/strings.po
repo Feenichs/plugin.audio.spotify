@@ -1,6 +1,6 @@
 # Kodi Media Center language file
 # Addon Name: Spotify
-# Addon id: plugin.audio.spotify
+# Addon id: plugin.audio.spotify.tv
 # Addon Provider: marcelveldt
 msgid ""
 msgstr ""

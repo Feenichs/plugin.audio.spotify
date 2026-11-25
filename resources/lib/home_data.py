@@ -1,5 +1,5 @@
 """
-    plugin.audio.spotify
+    plugin.audio.spotify.tv
     home_data.py
     Data handling of the TV interface (home window). The home window lists the
     plugin's directories via JSON-RPC and arranges them in tabs and rows.
@@ -10,7 +10,7 @@ import json
 import urllib.parse
 from typing import Any, Dict, List, Optional
 
-ADDON_ID = "plugin.audio.spotify"
+ADDON_ID = "plugin.audio.spotify.tv"
 PLUGIN_URL = f"plugin://{ADDON_ID}/"
 ADDON_MEDIA = f"/addons/{ADDON_ID}/resources/"
 
