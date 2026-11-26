@@ -934,15 +934,22 @@ class PluginContent:
             )
         else:
             # The album already has the first page of its tracks. Only fetch the rest.
-            track_ids = [track["id"] for track in album["tracks"].get("items", [])]
-            while album["tracks"]["total"] > len(track_ids):
-                tracks = self.__spotipy.album_tracks(
-                    album["id"], market=self.__user_country, limit=50, offset=len(track_ids)
+            # These tracks have all that is shown, so they are not fetched again
+            # in full (in chunks of 20, with the throttled shared client id), which
+            # would only add their popularity.
+            tracks = [dict(track) for track in album["tracks"].get("items", []) if track]
+            while album["tracks"]["total"] > len(tracks):
+                page = self.__spotipy.album_tracks(
+                    album["id"], market=self.__user_country, limit=50, offset=len(tracks)
                 )["items"]
-                if not tracks:
+                if not page:
                     break
-                track_ids += [track["id"] for track in tracks]
-            album_tracks = self.__prepare_track_listitems(track_ids, album_details=album)
+                tracks += [dict(track) for track in page if track]
+            # without its tracks, every track would contain all the others
+            album_details = {key: value for key, value in album.items() if key != "tracks"}
+            album_tracks = self.__prepare_track_listitems(
+                tracks=tracks, album_details=album_details
+            )
             self.cache.set(cache_str, album_tracks, checksum=checksum)
             cache_log(
                 f'Retrieved {album["tracks"]["total"]} UNCACHED tracks for album "{album["name"]}".'
@@ -1558,8 +1565,10 @@ class PluginContent:
                     country=self.__user_country, limit=50, offset=count
                 )["albums"]["items"]
                 count += 50
-            album_ids = [album["id"] for album in result["albums"]["items"]]
-            return self.__prepare_album_listitems(album_ids)
+            # as listed, see __get_artist_albums
+            return self.__prepare_album_listitems(
+                albums=[album for album in result["albums"]["items"] if album]
+            )
 
         return self.__get_fresh_or_stale(
             cache_str, checksum, fetch, BROWSE_CACHE_EXPIRATION, keep_stale_copy=True
@@ -1795,9 +1804,10 @@ class PluginContent:
             for artist in track["artists"]:
                 artists.append(artist["name"])
             track["artist"] = " / ".join(artists)
-            track["genre"] = " / ".join(track["genres"])
-            track["year"] = int(track["release_date"].split("-")[0])
-            track["rating"] = str(self.__get_track_rating(track["popularity"]))
+            # not in the albums of artists, see browse_artist_albums
+            track["genre"] = " / ".join(track.get("genres", []))
+            track["year"] = int((track.get("release_date") or "0").split("-")[0])
+            track["rating"] = str(self.__get_track_rating(track.get("popularity", 0)))
             track["artistid"] = track["artists"][0]["id"]
 
         return albums
@@ -2100,32 +2110,50 @@ class PluginContent:
     def browse_artist_just_appears_on(self) -> None:
         self.browse_artist_albums(album_type="appears_on")
 
+    def __get_artist_albums(self, album_type: str) -> List[Dict[str, Any]]:
+        """
+        The albums of an artist as listed, which has all that is shown. They were
+        fetched again in full, in chunks of 20 with the throttled shared client
+        id, which only added genres (always empty now) and popularity.
+        """
+        cache_str = f"spotify.artistalbums.{self.__artist_id}.{album_type}.{self.__user_country}"
+        checksum = self.__cache_checksum()
+        albums = self.cache.get(cache_str, checksum=checksum)
+        if albums:
+            return albums
+
+        def fetch() -> List[Dict[str, Any]]:
+            result = self.__spotipy.artist_albums(
+                self.__artist_id,
+                album_type=album_type,
+                country=self.__user_country,
+                limit=50,
+                offset=0,
+            )
+            items = result["items"]
+            while result["total"] > len(items):
+                page = self.__spotipy.artist_albums(
+                    self.__artist_id,
+                    album_type=album_type,
+                    country=self.__user_country,
+                    limit=50,
+                    offset=len(items),
+                )["items"]
+                if not page:
+                    break
+                items += page
+            return self.__prepare_album_listitems(albums=[album for album in items if album])
+
+        return self.__get_fresh_or_stale(
+            cache_str, checksum, fetch, BROWSE_CACHE_EXPIRATION, keep_stale_copy=True
+        )
+
     def browse_artist_albums(self, album_type: str) -> None:
         xbmcplugin.setContent(self.__addon_handle, "albums")
         xbmcplugin.setProperty(
             self.__addon_handle, "FolderName", xbmc.getLocalizedString(KODI_ALBUMS_STR_ID)
         )
-        artist_albums = self.__spotipy.artist_albums(
-            self.__artist_id,
-            album_type=album_type,
-            country=self.__user_country,
-            limit=50,
-            offset=0,
-        )
-        count = len(artist_albums["items"])
-        albumids = []
-        while artist_albums["total"] > count:
-            artist_albums["items"] += self.__spotipy.artist_albums(
-                self.__artist_id,
-                album_type=album_type,
-                country=self.__user_country,
-                limit=50,
-                offset=count,
-            )["items"]
-            count += 50
-        for album in artist_albums["items"]:
-            albumids.append(album["id"])
-        albums = self.__prepare_album_listitems(albumids)
+        albums = self.__get_artist_albums(album_type)
         self.__add_album_listitems(albums)
         xbmcplugin.addSortMethod(self.__addon_handle, xbmcplugin.SORT_METHOD_VIDEO_YEAR)
         xbmcplugin.addSortMethod(self.__addon_handle, xbmcplugin.SORT_METHOD_ALBUM_IGNORE_THE)
@@ -2169,7 +2197,42 @@ class PluginContent:
                 break
             albums += [item["album"] for item in page if item.get("album")]
         self.__fetched_saved_albums = albums
+        self.__cache_albums(albums)
         return albums
+
+    def __cache_saved_albums(self) -> None:
+        """
+        Caches the saved albums for __get_album once per library version, also
+        when the list of saved albums itself came from the cache.
+        """
+        album_ids = self.__get_saved_album_ids()
+        cache_str = f"spotify.savedalbums.albumscached.{self.__userid}"
+        checksum = self.__library_checksum(len(album_ids))
+        if self.__fetched_saved_albums is None and self.cache.get(cache_str, checksum=checksum):
+            return
+        if self.__fetched_saved_albums is None:
+            self.__fetch_saved_albums(len(album_ids))
+        self.cache.set(cache_str, True, checksum=checksum, expiration=ALBUM_CACHE_EXPIRATION)
+
+    def __cache_albums(self, albums: List[Dict[str, Any]]) -> None:
+        """
+        Full album objects for __get_album, so that saved albums open without
+        asking Spotify. Not in the memory cache, which would keep every album.
+        """
+        checksum = self.__addon.getSetting("cache_checksum")
+        enable_mem_cache = self.cache.enable_mem_cache
+        self.cache.enable_mem_cache = False
+        try:
+            for album in albums:
+                if album.get("id") and album.get("tracks"):
+                    self.cache.set(
+                        f"spotify.album.{album['id']}",
+                        album,
+                        checksum=checksum,
+                        expiration=ALBUM_CACHE_EXPIRATION,
+                    )
+        finally:
+            self.cache.enable_mem_cache = enable_mem_cache
 
     def __get_saved_albums(self) -> List[Dict[str, Any]]:
         album_ids = self.__get_saved_album_ids()
@@ -2450,10 +2513,10 @@ class PluginContent:
             market=self.__user_country,
         )
 
-        album_ids = []
-        for album in result["albums"]["items"]:
-            album_ids.append(album["id"])
-        albums = self.__prepare_album_listitems(album_ids)
+        # as listed, see __get_artist_albums
+        albums = self.__prepare_album_listitems(
+            albums=[album for album in result["albums"]["items"] if album]
+        )
         self.__add_album_listitems(albums, True)
         self.__add_next_button(result["albums"]["total"])
 
@@ -2571,7 +2634,11 @@ class PluginContent:
         finished = False
         try:
             with self.__impatient_spotipy():
-                for step in (self.__get_saved_albums, self.__get_saved_artists):
+                for step in (
+                    self.__get_saved_albums,
+                    self.__cache_saved_albums,
+                    self.__get_saved_artists,
+                ):
                     step()
                     if monitor.abortRequested():
                         return

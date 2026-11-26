@@ -49,6 +49,10 @@ OWN_CLIENT_METHODS = {
     "playlist_items",
 }
 
+# Apps in development mode get at most this many albums of an artist per request,
+# larger limits fail with "Invalid limit".
+OWN_ARTIST_ALBUMS_LIMIT = 10
+
 # Status codes of requests the own client id may not make
 FALLBACK_STATUS_CODES = (400, 401, 403, 404, 410)
 
@@ -115,7 +119,31 @@ class FallbackSpotify:
             return self.__playlist(*args, **kwargs)
         if name == "playlist_items":
             return self.__playlist_items(*args, **kwargs)
+        if name == "artist_albums":
+            return self.__artist_albums(*args, **kwargs)
         return _to_shared_format(getattr(self.__own, name)(*args, **kwargs))
+
+    def __artist_albums(self, artist_id, *args, limit=20, offset=0, **kwargs):
+        """One page of up to limit albums, from requests of OWN_ARTIST_ALBUMS_LIMIT"""
+        result = None
+        items = []
+        while len(items) < limit:
+            page = self.__own.artist_albums(
+                artist_id,
+                *args,
+                limit=min(OWN_ARTIST_ALBUMS_LIMIT, limit - len(items)),
+                offset=offset + len(items),
+                **kwargs,
+            )
+            result = result or page
+            items += page["items"]
+            if not page["items"] or offset + len(items) >= page["total"]:
+                break
+        result["items"] = items
+        result["limit"] = limit
+        result["offset"] = offset
+        result["next"] = None
+        return _to_shared_format(result)
 
     def __playlist_id(self, playlist_id, *args, **kwargs) -> str:
         return self.__own._get_id("playlist", playlist_id)
