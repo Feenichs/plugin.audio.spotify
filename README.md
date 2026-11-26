@@ -18,9 +18,11 @@ Unofficial spotify plugin for Kodi, (for now) not yet available in the official 
 >
 > **Since 2.0.0** the fork has its own add-on id `plugin.audio.spotify.tv` (name "Spotify TV"),
 > so it no longer replaces the original `plugin.audio.spotify` and both can be installed.
-> Coming from an older version of the fork: copy `userdata/addon_data/plugin.audio.spotify`
-> to `userdata/addon_data/plugin.audio.spotify.tv` to keep settings and sign-in, update
-> keymaps or favourites that use the old id, then uninstall the old add-on.
+> Coming from an older version of the fork: before installing, copy
+> `userdata/addon_data/plugin.audio.spotify` to `userdata/addon_data/plugin.audio.spotify.tv`
+> to keep settings, sign-in and history, but delete `simplecache.db` in the copy (its cached
+> lists contain links with the old id). Then enable the new add-on, update keymaps or
+> favourites that use the old id, and uninstall the old add-on.
 
 Uses 'bottle' and 'librespot - spotty' for playback, and 'spotipy' for the playlist, albums, etc. menus.
 
