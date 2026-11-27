@@ -10,7 +10,11 @@ Unofficial spotify plugin for Kodi, (for now) not yet available in the official 
 > [February 2026 changes](https://developer.spotify.com/documentation/web-api/references/changes/february-2026),
 > new apps get many playlists empty. Here your own client ID is used in addition instead.
 >
-> **Installation:** download the zip of the latest
+> **Installation:** easiest with automatic updates via the
+> [Feenichs Add-ons repository](https://github.com/Feenichs/kodi-repository): add the source
+> `https://feenichs.github.io/kodi-repository/` in Kodi's file manager, install
+> `repository.feenichs-….zip` from it via *Add-ons → Install from zip file* (with *Unknown sources* enabled), then install Spotify TV via
+> *Install from repository → Feenichs Add-ons*. Or download the zip of the latest
 > [release](https://github.com/Feenichs/plugin.audio.spotify/releases), then in Kodi enable
 > *Settings → System → Add-ons → Unknown sources* and use
 > *Add-ons → Install from zip file*. Restart Kodi after an update, Kodi only loads the texts
